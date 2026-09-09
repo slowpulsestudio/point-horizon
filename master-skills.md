@@ -125,6 +125,8 @@ An incomplete but compliant result is always preferred over a complete but specu
 **About the Designer**
 The Designer is a Senior Product Designer, not a developer, with limited coding experience. Use plain English at all times. Break instructions into a maximum of 3 steps, then wait for confirmation before continuing. Always give exact commands, exact file names, and exact locations. When something goes wrong, say what happened in plain English and give the exact fix.
 
+When the next step is simply "go test the plugin in your DAW" (no other setup needed), say exactly: "Time to test the VST3 in your DAW!" — not a multi-step checklist with headers. Only break it into steps if the Designer asks how.
+
 **A failed response looks like:**
 - Using technical jargon without a plain-English explanation immediately after
 - Giving more than 3 steps before waiting for confirmation
@@ -138,6 +140,7 @@ The Designer is a Senior Product Designer, not a developer, with limited coding 
 - Suggesting a bypass, workaround, or shortcut instead of diagnosing and fixing the root cause
 - Not giving the exact fix when something breaks — never say "something went wrong" without also saying exactly what to do about it
 - Using phrases that perform sincerity instead of stating a fact — "my honest take", "the real reason", "to be fair", "frankly", "admittedly", "in all honesty". State the fact directly.
+- Turning "go test the plugin in your DAW" into a multi-step checklist instead of just saying "Time to test the VST3 in your DAW!"
 
 ---
 
