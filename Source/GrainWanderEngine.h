@@ -20,12 +20,20 @@
  * while pitch is held off-centre); Grain Only resamples just the grain reads
  * used by Stretch/Drag, so untouched/dry audio stays at zero added latency.
  *
- * Singularity is a performance on/off toggle: on press, it freezes the last
- * moment of live input into a short loop and, the longer it's held, slows
- * that loop toward a near-static drone (crossing the "event horizon" into an
- * ever-more-stretched, ever-slower "singularity"). It overrides Mix while
- * engaged and crossfades in/out to avoid clicks. Releasing it ramps back to
- * normal playback.
+ * Singularity is a performance on/off toggle themed around real black-hole
+ * mechanics; all five deepen together the longer it's held, via a shared
+ * hold-time ramp (`singularityDepth01`) and a fast crossfade gate
+ * (`singularityBlend`) that keeps engage/release click-free:
+ *  - Gravity well: grain selection is pulled toward the pool's most recent
+ *    grain, tightening the wander into a single loop.
+ *  - Time dilation: the frozen loop's playback speed decays toward a
+ *    near-static drone (Time Dilation Freeze; see applySingularity()).
+ *  - Redshift: pitch auto-ramps toward -50% while held, snapping back to
+ *    the user's raw Pitch knob the instant it's released.
+ *  - Spaghettification: grain length itself stretches from short to very
+ *    long the longer it's held.
+ *  - Supernova: the final wet output is fed back into the history buffer,
+ *    compounding into a denser, self-reinforcing texture until released.
  */
 class GrainWanderEngine
 {
@@ -94,6 +102,14 @@ private:
     double singularityLoopOffset = 0.0;
     int singularityWindowLenSamples = 0;
 
+    // Shared "how deep in" ramp (0..1, grows with singularityHoldSeconds),
+    // used by Gravity well / Spaghettification / Redshift / Supernova.
+    double singularityDepth01 = 0.0;
+    // Redshift: raw Pitch knob while released, ramped toward -50% while held.
+    double currentEffectivePitchPercent = 0.0;
+    // Supernova: the previous block's final wet output, fed back into history.
+    juce::AudioBuffer<float> feedbackScratch;
+
     juce::AudioBuffer<float> dryScratch;
     juce::SmoothedValue<float> mixSmoothed;
 
@@ -137,16 +153,18 @@ private:
 
     juce::int64 pickNextSourceGrain (WanderState& state, juce::int64 poolAbsStart, int poolLenSamples,
                                       int grainFrames, int runLenMin, int runLenMax,
-                                      double speedLo, double speedHi);
+                                      double speedLo, double speedHi, double gravityWellPull);
 
     void processStretch (juce::AudioBuffer<float>& buffer, const Parameters& params);
     void processDrag (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead);
     void applyWholeSignalPitch (juce::AudioBuffer<float>& buffer, float pitchPercent);
+    void updateSingularityState (const Parameters& params, int numSamples);
     void applySingularity (juce::AudioBuffer<float>& buffer, const Parameters& params);
 
     static void computeIntensityParams (float intensity01, double& grainMs, double& speedLo, double& speedHi) noexcept;
     static void computeChopRange (float chopRate01, int& runLenMin, int& runLenMax) noexcept;
     static double pitchPercentToRatio (float pitchPercent) noexcept;
+    static double blendSpaghettiGrainMs (double normalGrainMs, double depth01, double gate) noexcept;
     int msToSamples (double ms) const noexcept;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GrainWanderEngine)

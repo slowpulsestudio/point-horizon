@@ -427,6 +427,88 @@ namespace
         std::cout << "PASS: Singularity hold (8s) and release stay finite" << std::endl;
         return true;
     }
+
+    // All five mechanics together (Gravity well, Time dilation, Redshift,
+    // Spaghettification, Supernova) must stay finite through a long hold and
+    // release, in both Stretch (grainOnly pitch) and Drag mode.
+    bool testSingularityAllMechanicsAreStable (GrainWanderEngine::Mode mode, GrainWanderEngine::PitchMode pitchMode)
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 512;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine engine;
+        engine.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = mode;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+        params.manualBpm = 137.0;
+        params.pitchMode = pitchMode;
+        params.pitchPercent = 20.0f; // nonzero, so Redshift has something to override
+
+        juce::Random rng (2468);
+
+        const int primeBlocks = (int) std::ceil (1.0 * sampleRate / blockSize);
+        for (int b = 0; b < primeBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+        }
+
+        params.singularityEngaged = true;
+        const int holdBlocks = (int) std::ceil (12.0 * sampleRate / blockSize);
+        for (int b = 0; b < holdBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Singularity (all mechanics) hold produced non-finite output" << std::endl;
+                return false;
+            }
+        }
+
+        params.singularityEngaged = false;
+        const int releaseBlocks = (int) std::ceil (2.0 * sampleRate / blockSize);
+        for (int b = 0; b < releaseBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Singularity (all mechanics) release produced non-finite output" << std::endl;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool testSingularityAllMechanicsStableInStretchMode()
+    {
+        const bool ok = testSingularityAllMechanicsAreStable (GrainWanderEngine::Mode::stretch,
+                                                               GrainWanderEngine::PitchMode::grainOnly);
+        std::cout << (ok ? "PASS: All 5 Singularity mechanics stay finite in Stretch mode (Grain Only pitch)"
+                          : "FAIL: Stretch mode mechanics test failed") << std::endl;
+        return ok;
+    }
+
+    bool testSingularityAllMechanicsStableInDragMode()
+    {
+        const bool ok = testSingularityAllMechanicsAreStable (GrainWanderEngine::Mode::drag,
+                                                                GrainWanderEngine::PitchMode::wholeSignal);
+        std::cout << (ok ? "PASS: All 5 Singularity mechanics stay finite in Drag mode (Whole Signal pitch)"
+                          : "FAIL: Drag mode mechanics test failed") << std::endl;
+        return ok;
+    }
 }
 
 int main()
@@ -440,6 +522,8 @@ int main()
     allPassed = testWholeSignalPitchSustainedIsStable() && allPassed;
     allPassed = testSingularityDisengagedIsBitExactBypass() && allPassed;
     allPassed = testSingularityHoldAndReleaseIsStable() && allPassed;
+    allPassed = testSingularityAllMechanicsStableInStretchMode() && allPassed;
+    allPassed = testSingularityAllMechanicsStableInDragMode() && allPassed;
 
     std::cout << (allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED") << std::endl;
     return allPassed ? 0 : 1;

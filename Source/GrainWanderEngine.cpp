@@ -21,6 +21,8 @@ void GrainWanderEngine::prepare (double sampleRateIn, int maxBlockSize, int numC
 
     singularityBlend.reset (sampleRate, 0.06);
     singularityWindowLenSamples = msToSamples (90.0);
+    feedbackScratch.setSize (numChannels, maxBlockSize);
+    feedbackScratch.clear();
 
     reset();
 }
@@ -59,6 +61,9 @@ void GrainWanderEngine::reset()
     singularityAnchorAbsStart = 0;
     singularityLoopOffset = 0.0;
     singularityBlend.setCurrentAndTargetValue (0.0f);
+    singularityDepth01 = 0.0;
+    currentEffectivePitchPercent = 0.0;
+    feedbackScratch.clear();
 
     mixSmoothed.setCurrentAndTargetValue (1.0f);
 }
@@ -67,6 +72,16 @@ double GrainWanderEngine::pitchPercentToRatio (float pitchPercent) noexcept
 {
     // -50% .. +50% -> playback/read rate 0.5x .. 1.5x (turntable-pitch style).
     return 1.0 + (double) pitchPercent / 100.0;
+}
+
+double GrainWanderEngine::blendSpaghettiGrainMs (double normalGrainMs, double depth01, double gate) noexcept
+{
+    // Spaghettification: grain length travels short -> very long as depth01
+    // grows, crossfaded in/out against the normal Intensity-derived length.
+    constexpr double shortMs = 8.0;
+    constexpr double longMs = 700.0;
+    const double spaghettiMs = juce::jmap (depth01, 0.0, 1.0, shortMs, longMs);
+    return normalGrainMs * (1.0 - gate) + spaghettiMs * gate;
 }
 
 void GrainWanderEngine::computeIntensityParams (float intensity01, double& grainMs, double& speedLo, double& speedHi) noexcept
@@ -207,7 +222,7 @@ void GrainWanderEngine::copyFromHistoryPitched (juce::AudioBuffer<float>& dest, 
 
 juce::int64 GrainWanderEngine::pickNextSourceGrain (WanderState& state, juce::int64 poolAbsStart, int poolLenSamples,
                                                      int grainFrames, int runLenMin, int runLenMax,
-                                                     double speedLo, double speedHi)
+                                                     double speedLo, double speedHi, double gravityWellPull)
 {
     const int numGrains = poolLenSamples / grainFrames;
     if (numGrains < 2)
@@ -219,7 +234,17 @@ juce::int64 GrainWanderEngine::pickNextSourceGrain (WanderState& state, juce::in
         state.runSpeed = speedLo + random.nextDouble() * (speedHi - speedLo);
     }
 
-    const auto srcIdx = ((juce::int64) state.grainPos) % (juce::int64) numGrains;
+    auto srcIdx = ((juce::int64) state.grainPos) % (juce::int64) numGrains;
+
+    if (gravityWellPull > 0.0)
+    {
+        // Pull the choice toward the pool's most recent grain — the
+        // "converging point" — tightening the wander into a single loop.
+        const auto wellIdx = (juce::int64) (numGrains - 1);
+        const double pulled = (double) srcIdx * (1.0 - gravityWellPull) + (double) wellIdx * gravityWellPull;
+        srcIdx = juce::jlimit ((juce::int64) 0, wellIdx, (juce::int64) std::llround (pulled));
+    }
+
     state.grainPos += state.runSpeed;
     state.runGrainsLeft -= 1;
 
@@ -229,8 +254,9 @@ juce::int64 GrainWanderEngine::pickNextSourceGrain (WanderState& state, juce::in
 void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const Parameters& params)
 {
     const int numSamples = buffer.getNumSamples();
-    const bool pitchThisPath = params.pitchMode == PitchMode::grainOnly && params.pitchPercent != 0.0f;
-    const double pitchRatio = pitchThisPath ? pitchPercentToRatio (params.pitchPercent) : 1.0;
+    const bool pitchThisPath = params.pitchMode == PitchMode::grainOnly && currentEffectivePitchPercent != 0.0;
+    const double pitchRatio = pitchThisPath ? pitchPercentToRatio ((float) currentEffectivePitchPercent) : 1.0;
+    const double singularityGate = (double) singularityBlend.getCurrentValue();
     int pos = 0;
 
     while (pos < numSamples)
@@ -239,6 +265,8 @@ void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const 
         {
             double grainMs, speedLo, speedHi;
             computeIntensityParams (params.intensity01, grainMs, speedLo, speedHi);
+            if (singularityGate > 0.0)
+                grainMs = blendSpaghettiGrainMs (grainMs, singularityDepth01, singularityGate);
             stretchGrainFrames = msToSamples (grainMs);
 
             int runLenMin, runLenMax;
@@ -251,7 +279,7 @@ void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const 
 
             stretchCurrentSourceAbsStart = pickNextSourceGrain (stretchWander, poolAbsStart, poolLen,
                                                                  stretchGrainFrames, runLenMin, runLenMax,
-                                                                 speedLo, speedHi);
+                                                                 speedLo, speedHi, singularityDepth01 * singularityGate);
             stretchGrainReadPos = (double) stretchCurrentSourceAbsStart;
             stretchSamplesIntoGrain = 0;
         }
@@ -280,8 +308,9 @@ void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const 
 void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead)
 {
     const int numSamples = buffer.getNumSamples();
-    const bool pitchThisPath = params.pitchMode == PitchMode::grainOnly && params.pitchPercent != 0.0f;
-    const double pitchRatio = pitchThisPath ? pitchPercentToRatio (params.pitchPercent) : 1.0;
+    const bool pitchThisPath = params.pitchMode == PitchMode::grainOnly && currentEffectivePitchPercent != 0.0;
+    const double pitchRatio = pitchThisPath ? pitchPercentToRatio ((float) currentEffectivePitchPercent) : 1.0;
+    const double singularityGate = (double) singularityBlend.getCurrentValue();
 
     double bpm = params.manualBpm;
     juce::int64 transportStart = fallbackTransportPos;
@@ -349,6 +378,8 @@ void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Par
                 {
                     double grainMs, speedLo, speedHi;
                     computeIntensityParams (params.intensity01, grainMs, speedLo, speedHi);
+                    if (singularityGate > 0.0)
+                        grainMs = blendSpaghettiGrainMs (grainMs, singularityDepth01, singularityGate);
                     dragGrainFrames = msToSamples (grainMs);
 
                     int runLenMin, runLenMax;
@@ -356,7 +387,7 @@ void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Par
 
                     dragCurrentSourceAbsStart = pickNextSourceGrain (dragWander, dragPoolAbsStart, dragPoolLenSamples,
                                                                       dragGrainFrames, runLenMin, runLenMax,
-                                                                      speedLo, speedHi);
+                                                                      speedLo, speedHi, singularityDepth01 * singularityGate);
                     dragGrainReadPos = (double) dragCurrentSourceAbsStart;
                     dragSamplesIntoGrain = 0;
                 }
@@ -428,10 +459,8 @@ void GrainWanderEngine::applyWholeSignalPitch (juce::AudioBuffer<float>& buffer,
     }
 }
 
-void GrainWanderEngine::applySingularity (juce::AudioBuffer<float>& buffer, const Parameters& params)
+void GrainWanderEngine::updateSingularityState (const Parameters& params, int numSamples)
 {
-    const int numSamples = buffer.getNumSamples();
-
     if (params.singularityEngaged && ! singularityWasEngaged)
     {
         // Rising edge: freeze onto whatever's playing right now.
@@ -445,6 +474,23 @@ void GrainWanderEngine::applySingularity (juce::AudioBuffer<float>& buffer, cons
 
     if (params.singularityEngaged)
         singularityHoldSeconds += (double) numSamples / sampleRate;
+
+    // Shared "how deep in" ramp driving Gravity well / Spaghettification /
+    // Redshift / Supernova — saturates toward 1 over a few seconds held.
+    constexpr double depthTimeConstantSeconds = 3.0;
+    singularityDepth01 = 1.0 - std::exp (-singularityHoldSeconds / depthTimeConstantSeconds);
+
+    // Redshift: ramp toward -50% while held, snap back to the raw knob the
+    // instant it's released ("crossing the horizon" the other way).
+    if (params.singularityEngaged)
+        currentEffectivePitchPercent = (double) params.pitchPercent * (1.0 - singularityDepth01) + -50.0 * singularityDepth01;
+    else
+        currentEffectivePitchPercent = (double) params.pitchPercent;
+}
+
+void GrainWanderEngine::applySingularity (juce::AudioBuffer<float>& buffer, const Parameters&)
+{
+    const int numSamples = buffer.getNumSamples();
 
     // Exponential decay from normal speed toward a near-static drone — the
     // longer the button is held, the closer to "frozen at the singularity".
@@ -481,8 +527,25 @@ void GrainWanderEngine::process (juce::AudioBuffer<float>& buffer, const Paramet
 {
     const int numSamples = buffer.getNumSamples();
 
+    updateSingularityState (params, numSamples);
+
     for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
         dryScratch.copyFrom (ch, 0, buffer, ch, 0, numSamples);
+
+    // Supernova: blend the previous block's wet output into what gets
+    // written to history, so the grain pool compounds on its own output.
+    constexpr double supernovaMaxGain = 0.75;
+    const double supernovaGain = singularityDepth01 * (double) singularityBlend.getCurrentValue() * supernovaMaxGain;
+    if (supernovaGain > 0.0)
+    {
+        for (int ch = 0; ch < numChannels && ch < buffer.getNumChannels(); ++ch)
+        {
+            auto* dest = buffer.getWritePointer (ch);
+            auto* fb = feedbackScratch.getReadPointer (ch);
+            for (int i = 0; i < numSamples; ++i)
+                dest[i] = (float) (dest[i] * (1.0 - supernovaGain) + fb[i] * supernovaGain);
+        }
+    }
 
     writeToHistory (buffer);
 
@@ -505,7 +568,10 @@ void GrainWanderEngine::process (juce::AudioBuffer<float>& buffer, const Paramet
     }
 
     if (params.pitchMode == PitchMode::wholeSignal)
-        applyWholeSignalPitch (buffer, params.pitchPercent);
+        applyWholeSignalPitch (buffer, (float) currentEffectivePitchPercent);
 
     applySingularity (buffer, params);
+
+    for (int ch = 0; ch < numChannels && ch < buffer.getNumChannels(); ++ch)
+        feedbackScratch.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 }
