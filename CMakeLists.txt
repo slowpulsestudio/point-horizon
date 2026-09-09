@@ -20,7 +20,7 @@ juce_add_plugin(JungleStretch
     PLUGIN_MANUFACTURER_CODE Slps
     PLUGIN_CODE Jstr
     FORMATS VST3
-    PRODUCT_NAME "Jungle Stretch"
+    PRODUCT_NAME "Point Horizon"
     COPY_PLUGIN_AFTER_BUILD TRUE
     VST3_COPY_DIR "$ENV{HOME}/Library/Audio/Plug-Ins/VST3/Slow Pulse Studio"
 )
