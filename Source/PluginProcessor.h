@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "GrainWanderEngine.h"
 
 class JungleStretchAudioProcessor : public juce::AudioProcessor
 {
@@ -42,11 +43,14 @@ public:
     static constexpr auto mixParamId = "mix";
     static constexpr auto triggerWindowParamId = "triggerWindow";
     static constexpr auto triggerChanceParamId = "triggerChance";
+    static constexpr auto manualBpmParamId = "manualBpm";
 
     juce::AudioProcessorValueTreeState apvts;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    GrainWanderEngine engine;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (JungleStretchAudioProcessor)
 };

@@ -45,12 +45,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout JungleStretchAudioProcessor:
         juce::ParameterID { triggerChanceParamId, 1 }, "Trigger Chance",
         juce::NormalisableRange<float> (0.0f, 100.0f), 100.0f, "%"));
 
+    // Fallback tempo for Drag's bar/beat gating when the host provides no playhead tempo.
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { manualBpmParamId, 1 }, "Manual BPM",
+        juce::NormalisableRange<float> (60.0f, 200.0f), 120.0f, "BPM"));
+
     return { params.begin(), params.end() };
 }
 
-void JungleStretchAudioProcessor::prepareToPlay (double, int)
+void JungleStretchAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Ring buffer / DSP state is added when the algorithm is ported (not yet).
+    engine.prepare (sampleRate, samplesPerBlock, getTotalNumOutputChannels());
 }
 
 void JungleStretchAudioProcessor::releaseResources()
@@ -67,9 +72,19 @@ void JungleStretchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // Passthrough scaffold — the grain-wander algorithm is ported in a later step.
-    for (auto channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
-        buffer.clear (channel, 0, buffer.getNumSamples());
+    GrainWanderEngine::Parameters params;
+    params.mode = apvts.getRawParameterValue (modeParamId)->load() < 0.5f
+                      ? GrainWanderEngine::Mode::stretch
+                      : GrainWanderEngine::Mode::drag;
+    params.intensity01 = apvts.getRawParameterValue (intensityParamId)->load() / 100.0f;
+    params.loopLengthMs = apvts.getRawParameterValue (loopLengthParamId)->load();
+    params.chopRate01 = apvts.getRawParameterValue (chopRateParamId)->load() / 100.0f;
+    params.mix01 = apvts.getRawParameterValue (mixParamId)->load() / 100.0f;
+    params.triggerWindow01 = apvts.getRawParameterValue (triggerWindowParamId)->load() / 100.0f;
+    params.triggerChance01 = apvts.getRawParameterValue (triggerChanceParamId)->load() / 100.0f;
+    params.manualBpm = (double) apvts.getRawParameterValue (manualBpmParamId)->load();
+
+    engine.process (buffer, params, getPlayHead());
 }
 
 juce::AudioProcessorEditor* JungleStretchAudioProcessor::createEditor()
