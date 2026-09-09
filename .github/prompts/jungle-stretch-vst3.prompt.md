@@ -102,47 +102,58 @@ operates on one complete, already-captured buffer). Adapt it as follows:
   re-rolling (3–9 in the original — consider exposing as a range or a
   single "randomness" knob that picks within a range).
 - **Mix**: dry/wet.
+- **Trigger Window** (Drag/Stumble/Turnaround/Half-Time Drop only): fraction
+  of the bar or beat that is active (e.g. last 25%), plus host tempo sync
+  (or a manual BPM fallback, 4/4 assumed) to compute bar/beat boundaries.
+- **Trigger Chance** (Drag/Stumble/Turnaround/Half-Time Drop only, 0–100%):
+  each eligible bar/beat independently rolls against this chance before
+  firing — an eligible window that loses the roll is left dry. Lets the
+  effect fire unpredictably instead of on every single bar/beat.
 - Optional stretch goals (do not build until the core chop is validated and
-  approved): tempo-sync grain size to note divisions; stereo-link vs.
-  independent L/R grain wandering for width.
+  approved): stereo-link vs. independent L/R grain wandering for width.
 
 ## Creative modes (5 presets on the same core algorithm)
 
-All five modes below reuse the identical grain-index-wandering core
+Round 1 offline testing (see `Prototyping/jungle_stretch_prototype.py`)
+showed that pushing the *continuous, always-on* wander toward short grains
+and wide speed ranges just sounds like noisy chatter, not a musical effect —
+that direction is rejected. The revised direction confines the wander to a
+**rhythmic position window** (tied to host tempo/bars/beats) instead of
+running continuously across the whole loop. All five modes below still
+reuse the identical grain-index-wandering core function unchanged
 (fixed-size grains, cumulative wandering index, per-run speed multiplier,
-modulo wrap into the history window). Nothing about the core algorithm
-changes between modes — each mode is just a different combination of
-grain-size range, speed-range, run-length distribution, and (for modes 4–5)
-one small, explicitly-scoped extension to the wander rule. Expose as a
-**Mode** selector; each mode may expose its own sub-range for Intensity
-rather than sharing one universal mapping.
+modulo wrap) — each mode only changes *when* that function is invoked
+(which time window is passed to it) and, for mode 5, its speed-range/run-
+length inputs. This requires a bar/beat clock: host tempo sync when
+available, otherwise a manual BPM parameter (assume 4/4 unless told
+otherwise).
 
-1. **Classic Jungle Stretch** (the default, as described above) — moderate
-   grain size (~20–70ms), speed range roughly 0.25×–2.5×, run length 3–9
-   grains. The baseline amen-break chop character.
-2. **Granular Chop** — much smaller grains (~5–20ms) and a wider, more
-   extreme speed range (e.g. 0.1×–4×) with short runs (1–4 grains). Produces
-   a denser, more chaotic micro-chop/granular-synthesis texture rather than
-   discrete audible "hits" repeating.
-3. **Skip** — speed multiplier is heavily biased toward 0 (near-frozen,
-   e.g. 0–0.15×) for most runs, with occasional short bursts up to 2–3× to
-   "catch up." Mimics a scratched CD / stuck-needle skip-and-lurch rather
-   than smooth wandering.
-4. **Reverse Wander** — extends the wander rule to allow negative speed
-   multipliers on some runs (grain index decrements instead of increments),
-   still wrapping modulo `num_grains`. Produces intermittent reversed grain
-   playback woven into forward playback. Keep the run-based speed model
-   identical; only the allowed sign of the speed range changes.
-5. **Freeze Glitch** — extends the run-length rule so that, occasionally
-   (a low-probability chance per run), a run's speed is forced to exactly 0
-   and its run length is drawn from a much longer range (e.g. 20–60 grains
-   instead of 3–9), producing an extended freeze/hold on a single grain
-   before wandering resumes. All other runs behave as in Classic mode.
+1. **Stretch** (the default, always-on) — the wander core runs continuously
+   across the whole rolling history window, as originally described. Keep
+   the speed range and grain size on the gentler end validated in Round 1
+   (avoid the short-grain/wide-speed extreme — confirmed to sound bad).
+2. **Drag** — the wander core is only active during the tail of each bar
+   (e.g. the last 1/4, adjustable), reset fresh at the start of each active
+   window; the rest of the bar passes through dry/untouched. Produces a
+   periodic stumble right before each bar resets, like a turntablist
+   dragging the last hit before the next downbeat.
+3. **Stumble** — same position-gated approach as Drag, but the window is a
+   short fraction of *every beat* rather than the end of the bar, so the
+   drag/stumble happens on approach to each beat instead of once per bar.
+4. **Turnaround** — same windowing as Drag (tail of the bar), but only
+   triggers on every Nth bar (e.g. every 4th or 8th, adjustable) instead of
+   every bar — an occasional fill/turnaround rather than a per-bar habit.
+5. **Half-Time Drop (Brake)** — same position-gated window as Drag, but
+   inside the window the core's speed range is pushed low (near-zero,
+   e.g. 0.05×–0.3×) with one single sustained run for the whole window
+   instead of several re-rolled runs — a deliberate slow-down/brake into
+   the window rather than a chattery reorder, snapping back to full speed
+   at the next downbeat.
 
-Do not build all five before Classic is validated end-to-end per
-`workflow/dsp-prototyping` (prototype, tune, and get sign-off on Classic
-first, then use the same offline-prototype-then-port process for each
-additional mode).
+Do not build all five before Stretch and Drag are validated end-to-end per
+`workflow/dsp-prototyping` (prototype, tune, and get sign-off on those two
+first, then use the same offline-prototype-then-port process for Stumble,
+Turnaround, and Half-Time Drop).
 
 ## Workflow
 
