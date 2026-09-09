@@ -76,6 +76,16 @@ Expose all user-facing parameters through a single `AudioProcessorValueTreeState
 
 ---
 
+**Every VST3 plugin has presets and a Randomise button in a top toolbar**
+Every VST3 plugin ships with a save-able preset system (a `ComboBox` populated from named presets) and a "Randomise" button that jitters the creative/tunable parameters, both placed together in a toolbar strip across the top of the editor — not buried in a submenu or absent entirely. This is a baseline UX expectation for every plugin from this studio, not an opt-in feature to be asked about per-project. See the `presetBox` + `randomiseButton` top toolbar in the Fillet plugin's `Source/PluginEditor.h` for a working reference implementation.
+
+**A failed response looks like:**
+- Shipping a VST3 editor with only the generic parameter list and no preset `ComboBox` or Randomise button
+- Adding presets/randomise but placing them somewhere other than a top toolbar (e.g. buried at the bottom, in a separate tab/page)
+- Treating presets or the Randomise button as a nice-to-have the Designer has to explicitly request for each new plugin
+
+---
+
 **Preset-defining values vs. global mode toggles**
 When a plugin has both save-able presets and boolean mode toggles that represent a general workflow preference (e.g. a hard/soft character switch, or a static-vs-dynamic processing mode), keep those toggles out of the preset-value struct/table entirely. Presets should only capture the continuous/creative parameters they're meant to tune — switching presets should never silently flip a mode switch the user deliberately set.
 
@@ -94,6 +104,14 @@ After building, validate with `pluginval` (JUCE's own automated plugin validator
 
 ---
 
+**Telling the Designer to go test in the DAW is one line, not a checklist**
+When the next step is simply "go test the plugin in your DAW" (no other setup needed), say exactly: "Time to test the VST3 in your DAW!" — not a multi-step checklist with headers. Only break it into steps if the Designer asks how.
+
+**A failed response looks like:**
+- Turning "go test the plugin in your DAW" into a multi-step checklist instead of just saying "Time to test the VST3 in your DAW!"
+
+---
+
 **DAW smoke-test project scaffold, gitignored from the start**
 When scaffolding a new JUCE plugin project, create a `Testing/` folder containing a DAW test project (e.g. an Ableton Live `.als` project) that loads the plugin for manual smoke testing, and add `Testing/` to `.gitignore` in the same commit that creates it. DAW projects auto-generate large, constantly-churning subfolders on every save (Ableton: `Backup/` with timestamped project snapshots, `Samples/` with recorded/bounced audio) — these are local working state, not project source, and produce noisy binary diffs if tracked. Do not commit the `Testing/` folder first and gitignore it later; set this up correctly at project creation time.
 
@@ -101,6 +119,11 @@ When scaffolding a new JUCE plugin project, create a `Testing/` folder containin
 - Committing the DAW test project folder before gitignoring it, requiring a later `git rm --cached` cleanup
 - Tracking `Backup/`/`Samples/`-style auto-generated DAW subfolders in git
 - Skipping the `Testing/` scaffold entirely because "the Designer can set it up manually"
+
+---
+
+## Resources
+prompts/ -> .github/prompts/
 
 # General Rules
 
@@ -125,8 +148,6 @@ An incomplete but compliant result is always preferred over a complete but specu
 **About the Designer**
 The Designer is a Senior Product Designer, not a developer, with limited coding experience. Use plain English at all times. Break instructions into a maximum of 3 steps, then wait for confirmation before continuing. Always give exact commands, exact file names, and exact locations. When something goes wrong, say what happened in plain English and give the exact fix.
 
-When the next step is simply "go test the plugin in your DAW" (no other setup needed), say exactly: "Time to test the VST3 in your DAW!" — not a multi-step checklist with headers. Only break it into steps if the Designer asks how.
-
 **A failed response looks like:**
 - Using technical jargon without a plain-English explanation immediately after
 - Giving more than 3 steps before waiting for confirmation
@@ -140,7 +161,6 @@ When the next step is simply "go test the plugin in your DAW" (no other setup ne
 - Suggesting a bypass, workaround, or shortcut instead of diagnosing and fixing the root cause
 - Not giving the exact fix when something breaks — never say "something went wrong" without also saying exactly what to do about it
 - Using phrases that perform sincerity instead of stating a fact — "my honest take", "the real reason", "to be fair", "frankly", "admittedly", "in all honesty". State the fact directly.
-- Turning "go test the plugin in your DAW" into a multi-step checklist instead of just saying "Time to test the VST3 in your DAW!"
 
 ---
 
@@ -219,6 +239,15 @@ When drunk mode is active:
 - If the request could mean two different things, list both options and ask — don't pick one and run
 - Flag any instruction that touches auth, secrets, data storage, or backend functions — these need a sober double-check
 - If something the Designer says contradicts a recent decision or the approved plan, point it out before acting on it
+
+---
+
+**Metaprompt requests get one copyable block**
+When the Designer asks for a "metaprompt", give the entire answer as one single copyable code snippet — no surrounding steps, no splitting it across multiple blocks.
+
+**A failed response looks like:**
+- Splitting a requested metaprompt across multiple code blocks or interleaving it with explanatory steps
+- Wrapping the metaprompt in a numbered walkthrough instead of a single copyable block
 
 # Architecture Rules
 

@@ -5,6 +5,7 @@
 # original build/meta-prompt used to create it — not from this file, and
 # not from the generated master-skills.md. Never infer project intent from
 # the skill names listed below.
+
 platform/juce-vst3-plugin
 workflow/general
 workflow/architecture

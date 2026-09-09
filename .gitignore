@@ -1,8 +1,0 @@
-.DS_Store
-__pycache__/
-
-# CMake build output (includes FetchContent-downloaded JUCE source)
-build/
-
-# DAW smoke-test project — local working state, not project source
-Testing/
