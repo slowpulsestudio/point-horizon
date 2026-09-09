@@ -87,12 +87,34 @@ Expose all user-facing parameters through a single `AudioProcessorValueTreeState
 ---
 
 **Every VST3 plugin has presets and a Randomise button in a top toolbar**
-Every VST3 plugin ships with a save-able preset system (a `ComboBox` populated from named presets) and a "Randomise" button that jitters the creative/tunable parameters, both placed together in a toolbar strip across the top of the editor — not buried in a submenu or absent entirely. This is a baseline UX expectation for every plugin from this studio, not an opt-in feature to be asked about per-project. See the `presetBox` + `randomiseButton` top toolbar in the Fillet plugin's `Source/PluginEditor.h` for a working reference implementation.
+Every VST3 plugin ships with a save-able preset system (a `ComboBox` populated from named presets) and a "Randomise" button that jitters the creative/tunable parameters, both placed together in a toolbar strip across the top of the editor — not buried in a submenu or absent entirely. The Randomise button sits immediately to the right of the preset `ComboBox`, not elsewhere in the toolbar. This is a baseline UX expectation for every plugin from this studio, not an opt-in feature to be asked about per-project. Use the shared `sps::PresetToolbar` component (bundled into this project's `Source/Components/PresetToolbar.h` — see the `## Resources` section) instead of reimplementing the toolbar from scratch each time. Run `/system-my-design` periodically to check for and review updates to this component.
 
 **A failed response looks like:**
 - Shipping a VST3 editor with only the generic parameter list and no preset `ComboBox` or Randomise button
 - Adding presets/randomise but placing them somewhere other than a top toolbar (e.g. buried at the bottom, in a separate tab/page)
+- Placing the Randomise button somewhere other than immediately to the right of the preset `ComboBox`
 - Treating presets or the Randomise button as a nice-to-have the Designer has to explicitly request for each new plugin
+- Reimplementing the toolbar/dirty-state logic from scratch instead of using `sps::PresetToolbar`
+
+---
+
+**Preset dirty-state indicator**
+When the current parameter values no longer match the saved preset they were loaded from (the Designer tweaked something, or Randomise was pressed), show the preset name in the `ComboBox` in italics with a trailing `*` (e.g. `Warm Pad*`). Revert to the plain, non-italic name with no `*` the moment the values match a saved preset again (including right after saving). `sps::PresetToolbar` (see above) already implements this via its `isDirty` callback — wire it up rather than reimplementing the italics/`*` logic.
+
+**A failed response looks like:**
+- Leaving the preset name unchanged (no italics, no `*`) after a parameter has been edited or Randomise pressed
+- Leaving the italics/`*` in place after the Designer saves the current values as/over that preset
+- Using a different dirty-state indicator than italics + trailing `*` (e.g. a separate icon, a color change, a modal dialog)
+
+---
+
+**Retrofit the preset/Randomise toolbar on any existing plugin missing it**
+The preset+Randomise toolbar and dirty-state indicator rules above are a baseline requirement for every plugin from this studio, not just new ones. If a Designer opens an existing plugin project that predates these rules (or only partially implements them) and asks for unrelated work on it, add the missing toolbar/indicator — using `sps::PresetToolbar` — as part of that same task instead of only mentioning it's missing.
+
+**A failed response looks like:**
+- Noticing the toolbar or dirty-state indicator is missing/incomplete on an existing plugin but only mentioning it instead of adding it
+- Waiting for the Designer to explicitly ask for the toolbar to be retrofitted before adding it
+- Treating these rules as applying only to brand-new plugins, not existing ones opened for other work
 
 ---
 
@@ -134,6 +156,7 @@ When scaffolding a new JUCE plugin project, create a `Testing/` folder containin
 
 ## Resources
 prompts/ -> .github/prompts/
+components/ -> Source/Components/
 
 # General Rules
 
@@ -316,7 +339,6 @@ Build the abstraction that today's requirement needs — not one that anticipate
 - Adding a plugin system, strategy pattern, or extra configuration layer for a case that doesn't exist yet
 - Generalising a function to handle inputs it will never actually receive
 
-
 # Git Rules
 
 ---
@@ -356,7 +378,6 @@ Only commit after the change has been verified locally (build succeeds, tests pa
 **A failed response looks like:**
 - Committing a change immediately after editing, without running it or its tests first
 
-
 # Testing Rules
 
 ---
@@ -394,7 +415,6 @@ During development, failures (failed requests, failed assertions, unexpected val
 **A failed response looks like:**
 - Catching an exception and continuing without logging it
 - A test or validation step that fails closed (reports success) when it can't actually verify the condition
-
 
 # DSP Prototyping Rules
 
