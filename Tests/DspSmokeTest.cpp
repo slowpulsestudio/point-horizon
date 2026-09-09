@@ -317,6 +317,116 @@ namespace
         std::cout << "PASS: Whole Signal pitch stays finite under 20s of sustained -50% pitch" << std::endl;
         return true;
     }
+
+    // Singularity disengaged must never alter output, regardless of how long
+    // the engine has been running or what else is happening.
+    bool testSingularityDisengagedIsBitExactBypass()
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 512;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine engineA;
+        GrainWanderEngine engineB;
+        engineA.prepare (sampleRate, blockSize, numChannels);
+        engineB.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = GrainWanderEngine::Mode::stretch;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+        params.singularityEngaged = false; // explicit, matches the struct default
+
+        const int totalBlocks = (int) std::ceil (3.0 * sampleRate / blockSize);
+
+        for (int b = 0; b < totalBlocks; ++b)
+        {
+            juce::Random rng (777 + b);
+            juce::AudioBuffer<float> bufferA (numChannels, blockSize);
+            fillWithNoise (bufferA, rng);
+            juce::AudioBuffer<float> bufferB;
+            bufferB.makeCopyOf (bufferA);
+
+            engineA.process (bufferA, params, nullptr);
+            engineB.process (bufferB, params, nullptr);
+
+            for (int ch = 0; ch < numChannels; ++ch)
+                for (int i = 0; i < blockSize; ++i)
+                    if (! juce::exactlyEqual (bufferA.getSample (ch, i), bufferB.getSample (ch, i)))
+                    {
+                        std::cout << "FAIL: Singularity=false engines diverge (should be deterministic/identical)" << std::endl;
+                        return false;
+                    }
+        }
+
+        std::cout << "PASS: Singularity disengaged is a stable, deterministic bypass" << std::endl;
+        return true;
+    }
+
+    // Holding Singularity for a long time (well past the speed floor), then
+    // releasing it, must stay finite throughout — no NaN, no crash.
+    bool testSingularityHoldAndReleaseIsStable()
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 512;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine engine;
+        engine.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = GrainWanderEngine::Mode::stretch;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+
+        juce::Random rng (321);
+
+        // 1s of normal playback first, so there's real history to freeze onto.
+        const int primeBlocks = (int) std::ceil (1.0 * sampleRate / blockSize);
+        for (int b = 0; b < primeBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+        }
+
+        // Hold for 8s — long enough to approach the near-static drone floor.
+        params.singularityEngaged = true;
+        const int holdBlocks = (int) std::ceil (8.0 * sampleRate / blockSize);
+        for (int b = 0; b < holdBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Singularity hold produced non-finite output" << std::endl;
+                return false;
+            }
+        }
+
+        // Release — ramp back to normal must also stay finite.
+        params.singularityEngaged = false;
+        const int releaseBlocks = (int) std::ceil (1.0 * sampleRate / blockSize);
+        for (int b = 0; b < releaseBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Singularity release produced non-finite output" << std::endl;
+                return false;
+            }
+        }
+
+        std::cout << "PASS: Singularity hold (8s) and release stay finite" << std::endl;
+        return true;
+    }
 }
 
 int main()
@@ -328,6 +438,8 @@ int main()
     allPassed = testPitchZeroMatchesAcrossModes() && allPassed;
     allPassed = testGrainOnlyPitchIsStable() && allPassed;
     allPassed = testWholeSignalPitchSustainedIsStable() && allPassed;
+    allPassed = testSingularityDisengagedIsBitExactBypass() && allPassed;
+    allPassed = testSingularityHoldAndReleaseIsStable() && allPassed;
 
     std::cout << (allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED") << std::endl;
     return allPassed ? 0 : 1;

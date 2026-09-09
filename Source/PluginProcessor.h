@@ -46,6 +46,7 @@ public:
     static constexpr auto manualBpmParamId = "manualBpm";
     static constexpr auto pitchParamId = "pitch";
     static constexpr auto pitchModeParamId = "pitchMode";
+    static constexpr auto singularityParamId = "singularity";
 
     juce::AudioProcessorValueTreeState apvts;
 

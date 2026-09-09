@@ -19,6 +19,13 @@
  * second rolling buffer (a small, unreported, variable delay only appears
  * while pitch is held off-centre); Grain Only resamples just the grain reads
  * used by Stretch/Drag, so untouched/dry audio stays at zero added latency.
+ *
+ * Singularity is a performance on/off toggle: on press, it freezes the last
+ * moment of live input into a short loop and, the longer it's held, slows
+ * that loop toward a near-static drone (crossing the "event horizon" into an
+ * ever-more-stretched, ever-slower "singularity"). It overrides Mix while
+ * engaged and crossfades in/out to avoid clicks. Releasing it ramps back to
+ * normal playback.
  */
 class GrainWanderEngine
 {
@@ -40,6 +47,7 @@ public:
         double manualBpm = 120.0;
         float pitchPercent = 0.0f; // -50 .. +50, 0 = no pitch change
         PitchMode pitchMode = PitchMode::wholeSignal;
+        bool singularityEngaged = false;
     };
 
     void prepare (double sampleRateIn, int maxBlockSize, int numChannelsIn);
@@ -76,6 +84,15 @@ private:
     juce::int64 pitchSamplesWritten = 0;
     double wholeSignalReadPos = 0.0;
     bool wholeSignalEngaged = false;
+
+    // Freeze-and-slow performance effect, sourced straight from `history` so
+    // it works identically regardless of Stretch/Drag mode.
+    juce::SmoothedValue<float> singularityBlend;
+    bool singularityWasEngaged = false;
+    double singularityHoldSeconds = 0.0;
+    juce::int64 singularityAnchorAbsStart = 0;
+    double singularityLoopOffset = 0.0;
+    int singularityWindowLenSamples = 0;
 
     juce::AudioBuffer<float> dryScratch;
     juce::SmoothedValue<float> mixSmoothed;
@@ -125,6 +142,7 @@ private:
     void processStretch (juce::AudioBuffer<float>& buffer, const Parameters& params);
     void processDrag (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead);
     void applyWholeSignalPitch (juce::AudioBuffer<float>& buffer, float pitchPercent);
+    void applySingularity (juce::AudioBuffer<float>& buffer, const Parameters& params);
 
     static void computeIntensityParams (float intensity01, double& grainMs, double& speedLo, double& speedHi) noexcept;
     static void computeChopRange (float chopRate01, int& runLenMin, int& runLenMax) noexcept;

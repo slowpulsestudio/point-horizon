@@ -19,6 +19,9 @@ void GrainWanderEngine::prepare (double sampleRateIn, int maxBlockSize, int numC
     dryScratch.setSize (numChannels, maxBlockSize);
     mixSmoothed.reset (sampleRate, 0.02);
 
+    singularityBlend.reset (sampleRate, 0.06);
+    singularityWindowLenSamples = msToSamples (90.0);
+
     reset();
 }
 
@@ -50,6 +53,12 @@ void GrainWanderEngine::reset()
     pitchSamplesWritten = 0;
     wholeSignalReadPos = 0.0;
     wholeSignalEngaged = false;
+
+    singularityWasEngaged = false;
+    singularityHoldSeconds = 0.0;
+    singularityAnchorAbsStart = 0;
+    singularityLoopOffset = 0.0;
+    singularityBlend.setCurrentAndTargetValue (0.0f);
 
     mixSmoothed.setCurrentAndTargetValue (1.0f);
 }
@@ -419,6 +428,55 @@ void GrainWanderEngine::applyWholeSignalPitch (juce::AudioBuffer<float>& buffer,
     }
 }
 
+void GrainWanderEngine::applySingularity (juce::AudioBuffer<float>& buffer, const Parameters& params)
+{
+    const int numSamples = buffer.getNumSamples();
+
+    if (params.singularityEngaged && ! singularityWasEngaged)
+    {
+        // Rising edge: freeze onto whatever's playing right now.
+        singularityAnchorAbsStart = juce::jmax ((juce::int64) 0, samplesWritten - singularityWindowLenSamples);
+        singularityLoopOffset = 0.0;
+        singularityHoldSeconds = 0.0;
+    }
+    singularityWasEngaged = params.singularityEngaged;
+
+    singularityBlend.setTargetValue (params.singularityEngaged ? 1.0f : 0.0f);
+
+    if (params.singularityEngaged)
+        singularityHoldSeconds += (double) numSamples / sampleRate;
+
+    // Exponential decay from normal speed toward a near-static drone — the
+    // longer the button is held, the closer to "frozen at the singularity".
+    constexpr double speedFloor = 0.02;
+    constexpr double timeConstantSeconds = 1.4;
+    const double speed = speedFloor + (1.0 - speedFloor) * std::exp (-singularityHoldSeconds / timeConstantSeconds);
+
+    const int windowLen = juce::jmax (1, singularityWindowLenSamples);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float blend = singularityBlend.getNextValue();
+
+        if (blend <= 0.0f)
+        {
+            singularityLoopOffset = std::fmod (singularityLoopOffset, (double) windowLen);
+            continue;
+        }
+
+        const double readPos = (double) singularityAnchorAbsStart + std::fmod (singularityLoopOffset, (double) windowLen);
+
+        for (int ch = 0; ch < numChannels && ch < buffer.getNumChannels(); ++ch)
+        {
+            const float frozen = readRingInterpolated (history, historyCapacitySamples, ch, readPos);
+            auto* out = buffer.getWritePointer (ch);
+            out[i] = out[i] + (frozen - out[i]) * blend;
+        }
+
+        singularityLoopOffset += speed;
+    }
+}
+
 void GrainWanderEngine::process (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead)
 {
     const int numSamples = buffer.getNumSamples();
@@ -448,4 +506,6 @@ void GrainWanderEngine::process (juce::AudioBuffer<float>& buffer, const Paramet
 
     if (params.pitchMode == PitchMode::wholeSignal)
         applyWholeSignalPitch (buffer, params.pitchPercent);
+
+    applySingularity (buffer, params);
 }

@@ -59,6 +59,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout JungleStretchAudioProcessor:
         juce::ParameterID { pitchModeParamId, 1 }, "Pitch Mode",
         juce::StringArray { "Whole Signal", "Grain Only" }, 0));
 
+    // "Crazy mode" performance toggle — freezes and progressively slows the
+    // last moment of live input toward a near-static drone while held.
+    params.push_back (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { singularityParamId, 1 }, "Singularity", false));
+
     return { params.begin(), params.end() };
 }
 
@@ -96,6 +101,7 @@ void JungleStretchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     params.pitchMode = apvts.getRawParameterValue (pitchModeParamId)->load() < 0.5f
                            ? GrainWanderEngine::PitchMode::wholeSignal
                            : GrainWanderEngine::PitchMode::grainOnly;
+    params.singularityEngaged = apvts.getRawParameterValue (singularityParamId)->load() > 0.5f;
 
     engine.process (buffer, params, getPlayHead());
 }
