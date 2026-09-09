@@ -44,6 +44,8 @@ public:
     static constexpr auto triggerWindowParamId = "triggerWindow";
     static constexpr auto triggerChanceParamId = "triggerChance";
     static constexpr auto manualBpmParamId = "manualBpm";
+    static constexpr auto pitchParamId = "pitch";
+    static constexpr auto pitchModeParamId = "pitchMode";
 
     juce::AudioProcessorValueTreeState apvts;
 

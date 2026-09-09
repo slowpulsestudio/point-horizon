@@ -10,6 +10,12 @@ void GrainWanderEngine::prepare (double sampleRateIn, int maxBlockSize, int numC
     history.setSize (numChannels, historyCapacitySamples);
     history.clear();
 
+    // Only used by Whole Signal pitch mode; same generous size for headroom
+    // against sustained pitch-bend gestures.
+    pitchHistoryCapacitySamples = historyCapacitySamples;
+    pitchHistory.setSize (numChannels, pitchHistoryCapacitySamples);
+    pitchHistory.clear();
+
     dryScratch.setSize (numChannels, maxBlockSize);
     mixSmoothed.reset (sampleRate, 0.02);
 
@@ -36,8 +42,22 @@ void GrainWanderEngine::reset()
     lastBarIndexSeen = -1;
     currentBarPassesChance = true;
     fallbackTransportPos = 0;
+    dragGrainReadPos = 0.0;
+
+    stretchGrainReadPos = 0.0;
+
+    pitchHistory.clear();
+    pitchSamplesWritten = 0;
+    wholeSignalReadPos = 0.0;
+    wholeSignalEngaged = false;
 
     mixSmoothed.setCurrentAndTargetValue (1.0f);
+}
+
+double GrainWanderEngine::pitchPercentToRatio (float pitchPercent) noexcept
+{
+    // -50% .. +50% -> playback/read rate 0.5x .. 1.5x (turntable-pitch style).
+    return 1.0 + (double) pitchPercent / 100.0;
 }
 
 void GrainWanderEngine::computeIntensityParams (float intensity01, double& grainMs, double& speedLo, double& speedHi) noexcept
@@ -76,15 +96,15 @@ int GrainWanderEngine::msToSamples (double ms) const noexcept
     return juce::jmax (1, (int) std::round (ms / 1000.0 * sampleRate));
 }
 
-void GrainWanderEngine::writeToHistory (const juce::AudioBuffer<float>& input)
+void GrainWanderEngine::writeBlockToRing (juce::AudioBuffer<float>& ring, int capacity, juce::int64& samplesWrittenRef,
+                                           const juce::AudioBuffer<float>& input, int numChannelsToWrite)
 {
     const int numSamples = input.getNumSamples();
-    const int capacity = historyCapacitySamples;
-    const int physicalStart = (int) (samplesWritten % (juce::int64) capacity);
+    const int physicalStart = (int) (samplesWrittenRef % (juce::int64) capacity);
 
-    for (int ch = 0; ch < numChannels; ++ch)
+    for (int ch = 0; ch < numChannelsToWrite; ++ch)
     {
-        auto* dest = history.getWritePointer (ch);
+        auto* dest = ring.getWritePointer (ch);
         auto* src = input.getReadPointer (juce::jmin (ch, input.getNumChannels() - 1));
 
         const int firstPart = juce::jmin (numSamples, capacity - physicalStart);
@@ -95,7 +115,32 @@ void GrainWanderEngine::writeToHistory (const juce::AudioBuffer<float>& input)
             juce::FloatVectorOperations::copy (dest, src + firstPart, remaining);
     }
 
-    samplesWritten += numSamples;
+    samplesWrittenRef += numSamples;
+}
+
+float GrainWanderEngine::readRingInterpolated (const juce::AudioBuffer<float>& ring, int capacity,
+                                                int channel, double absoluteFractionalPos) noexcept
+{
+    const double flo = std::floor (absoluteFractionalPos);
+    const auto i0 = (juce::int64) flo;
+    const double frac = absoluteFractionalPos - flo;
+
+    auto wrap = [capacity] (juce::int64 idx) -> int
+    {
+        auto m = idx % (juce::int64) capacity;
+        if (m < 0) m += capacity;
+        return (int) m;
+    };
+
+    const auto p0 = wrap (i0);
+    const auto p1 = wrap (i0 + 1);
+    const auto* data = ring.getReadPointer (channel);
+    return (float) (data[p0] + (data[p1] - data[p0]) * frac);
+}
+
+void GrainWanderEngine::writeToHistory (const juce::AudioBuffer<float>& input)
+{
+    writeBlockToRing (history, historyCapacitySamples, samplesWritten, input, numChannels);
 }
 
 void GrainWanderEngine::copyFromHistory (juce::AudioBuffer<float>& dest, int destStartSample,
@@ -129,6 +174,28 @@ bool GrainWanderEngine::isAbsRangeAvailable (juce::int64 absStart, int len) cons
     return (samplesWritten - absStart) <= (juce::int64) historyCapacitySamples;
 }
 
+void GrainWanderEngine::copyFromHistoryPitched (juce::AudioBuffer<float>& dest, int destStartSample, int len,
+                                                 double& readPos, double ratio) const
+{
+    const auto minAbs = juce::jmax ((juce::int64) 0, samplesWritten - historyCapacitySamples);
+    const auto maxAbs = samplesWritten - 1;
+
+    for (int i = 0; i < len; ++i)
+    {
+        const auto flooredAbs = (juce::int64) std::floor (readPos);
+        double clampedPos = readPos;
+        if (flooredAbs < minAbs)
+            clampedPos = (double) minAbs;
+        else if (flooredAbs + 1 > maxAbs)
+            clampedPos = (double) juce::jmax (minAbs, maxAbs - 1);
+
+        for (int ch = 0; ch < numChannels && ch < dest.getNumChannels(); ++ch)
+            dest.setSample (ch, destStartSample + i, readRingInterpolated (history, historyCapacitySamples, ch, clampedPos));
+
+        readPos += ratio;
+    }
+}
+
 juce::int64 GrainWanderEngine::pickNextSourceGrain (WanderState& state, juce::int64 poolAbsStart, int poolLenSamples,
                                                      int grainFrames, int runLenMin, int runLenMax,
                                                      double speedLo, double speedHi)
@@ -153,6 +220,8 @@ juce::int64 GrainWanderEngine::pickNextSourceGrain (WanderState& state, juce::in
 void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const Parameters& params)
 {
     const int numSamples = buffer.getNumSamples();
+    const bool pitchThisPath = params.pitchMode == PitchMode::grainOnly && params.pitchPercent != 0.0f;
+    const double pitchRatio = pitchThisPath ? pitchPercentToRatio (params.pitchPercent) : 1.0;
     int pos = 0;
 
     while (pos < numSamples)
@@ -174,6 +243,7 @@ void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const 
             stretchCurrentSourceAbsStart = pickNextSourceGrain (stretchWander, poolAbsStart, poolLen,
                                                                  stretchGrainFrames, runLenMin, runLenMax,
                                                                  speedLo, speedHi);
+            stretchGrainReadPos = (double) stretchCurrentSourceAbsStart;
             stretchSamplesIntoGrain = 0;
         }
 
@@ -181,9 +251,16 @@ void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const 
 
         if (stretchCurrentSourceAbsStart >= 0)
         {
-            const auto srcStart = stretchCurrentSourceAbsStart + stretchSamplesIntoGrain;
-            if (isAbsRangeAvailable (srcStart, chunk))
-                copyFromHistory (buffer, pos, srcStart, chunk);
+            if (pitchThisPath)
+            {
+                copyFromHistoryPitched (buffer, pos, chunk, stretchGrainReadPos, pitchRatio);
+            }
+            else
+            {
+                const auto srcStart = stretchCurrentSourceAbsStart + stretchSamplesIntoGrain;
+                if (isAbsRangeAvailable (srcStart, chunk))
+                    copyFromHistory (buffer, pos, srcStart, chunk);
+            }
         }
 
         pos += chunk;
@@ -194,6 +271,8 @@ void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const 
 void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead)
 {
     const int numSamples = buffer.getNumSamples();
+    const bool pitchThisPath = params.pitchMode == PitchMode::grainOnly && params.pitchPercent != 0.0f;
+    const double pitchRatio = pitchThisPath ? pitchPercentToRatio (params.pitchPercent) : 1.0;
 
     double bpm = params.manualBpm;
     juce::int64 transportStart = fallbackTransportPos;
@@ -269,6 +348,7 @@ void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Par
                     dragCurrentSourceAbsStart = pickNextSourceGrain (dragWander, dragPoolAbsStart, dragPoolLenSamples,
                                                                       dragGrainFrames, runLenMin, runLenMax,
                                                                       speedLo, speedHi);
+                    dragGrainReadPos = (double) dragCurrentSourceAbsStart;
                     dragSamplesIntoGrain = 0;
                 }
 
@@ -276,9 +356,16 @@ void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Par
 
                 if (dragCurrentSourceAbsStart >= 0)
                 {
-                    const auto srcStart = dragCurrentSourceAbsStart + dragSamplesIntoGrain;
-                    if (isAbsRangeAvailable (srcStart, grainChunk))
-                        copyFromHistory (buffer, pos + subPos, srcStart, grainChunk);
+                    if (pitchThisPath)
+                    {
+                        copyFromHistoryPitched (buffer, pos + subPos, grainChunk, dragGrainReadPos, pitchRatio);
+                    }
+                    else
+                    {
+                        const auto srcStart = dragCurrentSourceAbsStart + dragSamplesIntoGrain;
+                        if (isAbsRangeAvailable (srcStart, grainChunk))
+                            copyFromHistory (buffer, pos + subPos, srcStart, grainChunk);
+                    }
                 }
 
                 subPos += grainChunk;
@@ -291,6 +378,45 @@ void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Par
     }
 
     fallbackTransportPos += numSamples;
+}
+
+void GrainWanderEngine::applyWholeSignalPitch (juce::AudioBuffer<float>& buffer, float pitchPercent)
+{
+    const int numSamples = buffer.getNumSamples();
+    const auto blockStartAbs = pitchSamplesWritten;
+
+    writeBlockToRing (pitchHistory, pitchHistoryCapacitySamples, pitchSamplesWritten, buffer, numChannels);
+
+    if (pitchPercent == 0.0f)
+    {
+        wholeSignalEngaged = false;
+        return; // bit-exact bypass — buffer already holds the un-pitched mix.
+    }
+
+    if (! wholeSignalEngaged)
+    {
+        wholeSignalReadPos = (double) blockStartAbs;
+        wholeSignalEngaged = true;
+    }
+
+    const double ratio = pitchPercentToRatio (pitchPercent);
+    const auto minAbs = juce::jmax ((juce::int64) 0, pitchSamplesWritten - pitchHistoryCapacitySamples);
+    const auto maxAbs = pitchSamplesWritten - 1;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const auto flooredAbs = (juce::int64) std::floor (wholeSignalReadPos);
+        double clampedPos = wholeSignalReadPos;
+        if (flooredAbs < minAbs)
+            clampedPos = (double) minAbs;
+        else if (flooredAbs + 1 > maxAbs)
+            clampedPos = (double) juce::jmax (minAbs, maxAbs - 1);
+
+        for (int ch = 0; ch < numChannels && ch < buffer.getNumChannels(); ++ch)
+            buffer.setSample (ch, i, readRingInterpolated (pitchHistory, pitchHistoryCapacitySamples, ch, clampedPos));
+
+        wholeSignalReadPos += ratio;
+    }
 }
 
 void GrainWanderEngine::process (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead)
@@ -319,4 +445,7 @@ void GrainWanderEngine::process (juce::AudioBuffer<float>& buffer, const Paramet
             out[i] = dry + (out[i] - dry) * m;
         }
     }
+
+    if (params.pitchMode == PitchMode::wholeSignal)
+        applyWholeSignalPitch (buffer, params.pitchPercent);
 }

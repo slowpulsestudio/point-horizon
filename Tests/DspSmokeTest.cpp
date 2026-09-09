@@ -167,6 +167,156 @@ namespace
         std::cout << "PASS: Drag mode ran for 16 bars with finite output" << std::endl;
         return true;
     }
+
+    // Pitch=0 must be a no-op regardless of Pitch Mode — toggling the mode
+    // alone (without moving the Pitch knob) must never change the output.
+    bool testPitchZeroMatchesAcrossModes()
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 512;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine wholeSignalEngine;
+        GrainWanderEngine grainOnlyEngine;
+        wholeSignalEngine.prepare (sampleRate, blockSize, numChannels);
+        grainOnlyEngine.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = GrainWanderEngine::Mode::stretch;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+        params.pitchPercent = 0.0f;
+
+        auto wholeSignalParams = params;
+        wholeSignalParams.pitchMode = GrainWanderEngine::PitchMode::wholeSignal;
+        auto grainOnlyParams = params;
+        grainOnlyParams.pitchMode = GrainWanderEngine::PitchMode::grainOnly;
+
+        const int totalBlocks = (int) std::ceil (6.0 * sampleRate / blockSize); // > 4s Loop Length
+
+        for (int b = 0; b < totalBlocks; ++b)
+        {
+            juce::Random rng (1234 + b); // identical noise fed to both engines this block
+            juce::AudioBuffer<float> bufferA (numChannels, blockSize);
+            fillWithNoise (bufferA, rng);
+            juce::AudioBuffer<float> bufferB;
+            bufferB.makeCopyOf (bufferA);
+
+            wholeSignalEngine.process (bufferA, wholeSignalParams, nullptr);
+            grainOnlyEngine.process (bufferB, grainOnlyParams, nullptr);
+
+            for (int ch = 0; ch < numChannels; ++ch)
+                for (int i = 0; i < blockSize; ++i)
+                    if (! juce::exactlyEqual (bufferA.getSample (ch, i), bufferB.getSample (ch, i)))
+                    {
+                        std::cout << "FAIL: Pitch=0 differs between Whole Signal and Grain Only modes" << std::endl;
+                        return false;
+                    }
+        }
+
+        std::cout << "PASS: Pitch=0 is identical across both Pitch Modes" << std::endl;
+        return true;
+    }
+
+    // Grain Only pitch must produce finite, audibly different audio, and must
+    // not need any added plugin latency (still checked via the smoke run).
+    bool testGrainOnlyPitchIsStable()
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 512;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine engine;
+        engine.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = GrainWanderEngine::Mode::stretch;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+        params.pitchMode = GrainWanderEngine::PitchMode::grainOnly;
+        params.pitchPercent = -35.0f;
+
+        juce::Random rng (11);
+        double totalDiff = 0.0;
+        const int totalBlocks = (int) std::ceil (8.0 * sampleRate / blockSize);
+
+        for (int b = 0; b < totalBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            juce::AudioBuffer<float> dry;
+            dry.makeCopyOf (buffer);
+
+            // Halfway through, flip to a positive pitch to simulate a live knob move.
+            if (b == totalBlocks / 2)
+                params.pitchPercent = 40.0f;
+
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Grain Only pitch produced non-finite output" << std::endl;
+                return false;
+            }
+
+            for (int ch = 0; ch < numChannels; ++ch)
+                for (int i = 0; i < blockSize; ++i)
+                    totalDiff += std::abs (buffer.getSample (ch, i) - dry.getSample (ch, i));
+        }
+
+        if (totalDiff <= 0.0)
+        {
+            std::cout << "FAIL: Grain Only pitch produced no audible change" << std::endl;
+            return false;
+        }
+
+        std::cout << "PASS: Grain Only pitch is stable across a live knob move" << std::endl;
+        return true;
+    }
+
+    // Whole Signal pitch held at a sustained extreme must stay finite even
+    // once the read pointer's drift exceeds the ring buffer and gets clamped.
+    bool testWholeSignalPitchSustainedIsStable()
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 512;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine engine;
+        engine.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = GrainWanderEngine::Mode::drag;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+        params.manualBpm = 137.0;
+        params.pitchMode = GrainWanderEngine::PitchMode::wholeSignal;
+        params.pitchPercent = -50.0f; // worst case: read pointer falls behind fastest
+
+        juce::Random rng (55);
+        // 20s sustained — long enough to exceed the ~8.5s pitch history capacity
+        // and exercise the clamp-to-valid-range logic repeatedly.
+        const int totalBlocks = (int) std::ceil (20.0 * sampleRate / blockSize);
+
+        for (int b = 0; b < totalBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Whole Signal pitch produced non-finite output under sustained extreme pitch" << std::endl;
+                return false;
+            }
+        }
+
+        std::cout << "PASS: Whole Signal pitch stays finite under 20s of sustained -50% pitch" << std::endl;
+        return true;
+    }
 }
 
 int main()
@@ -175,6 +325,9 @@ int main()
     allPassed = testMixZeroIsBitExactBypass() && allPassed;
     allPassed = testStretchProducesFiniteWetAudio() && allPassed;
     allPassed = testDragModeIsStable() && allPassed;
+    allPassed = testPitchZeroMatchesAcrossModes() && allPassed;
+    allPassed = testGrainOnlyPitchIsStable() && allPassed;
+    allPassed = testWholeSignalPitchSustainedIsStable() && allPassed;
 
     std::cout << (allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED") << std::endl;
     return allPassed ? 0 : 1;

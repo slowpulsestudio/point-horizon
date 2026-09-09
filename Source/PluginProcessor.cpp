@@ -50,6 +50,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout JungleStretchAudioProcessor:
         juce::ParameterID { manualBpmParamId, 1 }, "Manual BPM",
         juce::NormalisableRange<float> (60.0f, 200.0f), 120.0f, "BPM"));
 
+    // Live "rough" pitching (turntable-style, not pitch-preserving).
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { pitchParamId, 1 }, "Pitch",
+        juce::NormalisableRange<float> (-50.0f, 50.0f), 0.0f, "%"));
+
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { pitchModeParamId, 1 }, "Pitch Mode",
+        juce::StringArray { "Whole Signal", "Grain Only" }, 0));
+
     return { params.begin(), params.end() };
 }
 
@@ -83,6 +92,10 @@ void JungleStretchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     params.triggerWindow01 = apvts.getRawParameterValue (triggerWindowParamId)->load() / 100.0f;
     params.triggerChance01 = apvts.getRawParameterValue (triggerChanceParamId)->load() / 100.0f;
     params.manualBpm = (double) apvts.getRawParameterValue (manualBpmParamId)->load();
+    params.pitchPercent = apvts.getRawParameterValue (pitchParamId)->load();
+    params.pitchMode = apvts.getRawParameterValue (pitchModeParamId)->load() < 0.5f
+                           ? GrainWanderEngine::PitchMode::wholeSignal
+                           : GrainWanderEngine::PitchMode::grainOnly;
 
     engine.process (buffer, params, getPlayHead());
 }
