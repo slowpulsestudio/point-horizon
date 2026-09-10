@@ -177,7 +177,10 @@ void JungleStretchAudioProcessor::setStateInformation (const void* data, int siz
 {
     if (std::unique_ptr<juce::XmlElement> xmlState (getXmlFromBinary (data, sizeInBytes)); xmlState != nullptr)
         if (xmlState->hasTagName (apvts.state.getType()))
+        {
             apvts.replaceState (juce::ValueTree::fromXml (*xmlState));
+            hasRestoredState = true;
+        }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

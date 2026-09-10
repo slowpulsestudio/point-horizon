@@ -50,6 +50,11 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
+    // True once setStateInformation() has restored a saved DAW state. The editor
+    // uses this to tell a genuinely fresh instance apart from a restored one, so
+    // it only auto-loads the first named preset on a true first open.
+    bool hasRestoredState = false;
+
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
