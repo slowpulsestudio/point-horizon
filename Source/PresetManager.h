@@ -5,12 +5,12 @@
 
 // Preset data and apply/capture/randomise helpers for JungleStretch, kept
 // separate from the generic sps::PresetToolbar UI component (see
-// Source/Components/PresetToolbar.h). Mode, Pitch Mode, and Singularity are
-// deliberately excluded from all of this — they're global processing-mode
-// toggles, not creative/tunable values (see "Preset-defining values vs.
-// global mode toggles" in master-skills.md). Mix is also excluded — presets
-// and Randomise never touch Input/Output/Mix-section controls (see
-// project-specific-agent-instructions.md).
+// Source/Components/PresetToolbar.h). Mode, Pitch Mode, Singularity, and
+// Singularity Mode are deliberately excluded from all of this — they're
+// global processing-mode toggles, not creative/tunable values (see
+// "Preset-defining values vs. global mode toggles" in master-skills.md).
+// Mix is also excluded — presets and Randomise never touch Input/Output/Mix-
+// section controls (see project-specific-agent-instructions.md).
 namespace JungleStretchPresets
 {
 

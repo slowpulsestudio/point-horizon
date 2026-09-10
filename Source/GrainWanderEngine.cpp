@@ -60,6 +60,8 @@ void GrainWanderEngine::reset()
     singularityHoldSeconds = 0.0;
     singularityAnchorAbsStart = 0;
     singularityLoopOffset = 0.0;
+    for (auto& offset : singularityUnisonOffsets)
+        offset = 0.0;
     singularityBlend.setCurrentAndTargetValue (0.0f);
     singularityDepth01 = 0.0;
     currentEffectivePitchPercent = 0.0;
@@ -517,6 +519,8 @@ void GrainWanderEngine::updateSingularityState (const Parameters& params, int nu
         // Rising edge: freeze onto whatever's playing right now.
         singularityAnchorAbsStart = juce::jmax ((juce::int64) 0, samplesWritten - singularityWindowLenSamples);
         singularityLoopOffset = 0.0;
+        for (auto& offset : singularityUnisonOffsets)
+            offset = 0.0;
         singularityHoldSeconds = 0.0;
     }
     singularityWasEngaged = params.singularityEngaged;
@@ -531,46 +535,91 @@ void GrainWanderEngine::updateSingularityState (const Parameters& params, int nu
     constexpr double depthTimeConstantSeconds = 3.0;
     singularityDepth01 = 1.0 - std::exp (-singularityHoldSeconds / depthTimeConstantSeconds);
 
-    // Redshift: ramp toward -50% while held, snap back to the raw knob the
-    // instant it's released ("crossing the horizon" the other way).
+    // Redshift/Blueshift: ramp toward -50%/+50% while held (Grey hole holds
+    // at the raw knob, no pull), snapping back the instant it's released.
     if (params.singularityEngaged)
-        currentEffectivePitchPercent = (double) params.pitchPercent * (1.0 - singularityDepth01) + -50.0 * singularityDepth01;
+    {
+        double targetPitchPercent = -50.0; // Black hole: Redshift
+        if (params.singularityMode == SingularityMode::whiteHole)
+            targetPitchPercent = 50.0; // Blueshift
+        else if (params.singularityMode == SingularityMode::greyHole)
+            targetPitchPercent = (double) params.pitchPercent; // no pull
+
+        currentEffectivePitchPercent = (double) params.pitchPercent * (1.0 - singularityDepth01) + targetPitchPercent * singularityDepth01;
+    }
     else
+    {
         currentEffectivePitchPercent = (double) params.pitchPercent;
+    }
 }
 
-void GrainWanderEngine::applySingularity (juce::AudioBuffer<float>& buffer, const Parameters&)
+void GrainWanderEngine::applySingularity (juce::AudioBuffer<float>& buffer, const Parameters& params)
 {
     const int numSamples = buffer.getNumSamples();
-
-    // Exponential decay from normal speed toward a near-static drone — the
-    // longer the button is held, the closer to "frozen at the singularity".
-    constexpr double speedFloor = 0.02;
-    constexpr double timeConstantSeconds = 1.4;
-    const double speed = speedFloor + (1.0 - speedFloor) * std::exp (-singularityHoldSeconds / timeConstantSeconds);
-
     const int windowLen = juce::jmax (1, singularityWindowLenSamples);
 
+    if (params.singularityMode == SingularityMode::blackHole)
+    {
+        // Exponential decay from normal speed toward a near-static drone — the
+        // longer the button is held, the closer to "frozen at the singularity".
+        constexpr double speedFloor = 0.02;
+        constexpr double timeConstantSeconds = 1.4;
+        const double speed = speedFloor + (1.0 - speedFloor) * std::exp (-singularityHoldSeconds / timeConstantSeconds);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float blend = singularityBlend.getNextValue();
+
+            if (blend <= 0.0f)
+            {
+                singularityLoopOffset = std::fmod (singularityLoopOffset, (double) windowLen);
+                continue;
+            }
+
+            const double readPos = (double) singularityAnchorAbsStart + std::fmod (singularityLoopOffset, (double) windowLen);
+
+            for (int ch = 0; ch < numChannels && ch < buffer.getNumChannels(); ++ch)
+            {
+                const float frozen = readRingInterpolated (history, historyCapacitySamples, ch, readPos);
+                auto* out = buffer.getWritePointer (ch);
+                out[i] = out[i] + (frozen - out[i]) * blend;
+            }
+
+            singularityLoopOffset += speed;
+        }
+        return;
+    }
+
+    // Grey/White hole: fixed-rate loop (no exponential glide), 3 slightly
+    // detuned unison layers summed and soft-saturated into a drone.
     for (int i = 0; i < numSamples; ++i)
     {
         const float blend = singularityBlend.getNextValue();
 
         if (blend <= 0.0f)
         {
-            singularityLoopOffset = std::fmod (singularityLoopOffset, (double) windowLen);
+            for (auto& offset : singularityUnisonOffsets)
+                offset = std::fmod (offset, (double) windowLen);
             continue;
         }
 
-        const double readPos = (double) singularityAnchorAbsStart + std::fmod (singularityLoopOffset, (double) windowLen);
-
         for (int ch = 0; ch < numChannels && ch < buffer.getNumChannels(); ++ch)
         {
-            const float frozen = readRingInterpolated (history, historyCapacitySamples, ch, readPos);
+            double droneSum = 0.0;
+            for (int layer = 0; layer < singularityUnisonLayers; ++layer)
+            {
+                const double readPos = (double) singularityAnchorAbsStart + std::fmod (singularityUnisonOffsets[layer], (double) windowLen);
+                droneSum += (double) readRingInterpolated (history, historyCapacitySamples, ch, readPos);
+            }
+            const double drone = droneSum / (double) singularityUnisonLayers;
+            const float saturated = (float) (std::tanh (singularityUnisonSaturationDrive * drone) / std::tanh (singularityUnisonSaturationDrive));
+
             auto* out = buffer.getWritePointer (ch);
-            out[i] = out[i] + (frozen - out[i]) * blend;
+            out[i] = out[i] + (saturated - out[i]) * blend;
         }
 
-        singularityLoopOffset += speed;
+        for (int layer = 0; layer < singularityUnisonLayers; ++layer)
+            singularityUnisonOffsets[layer] += singularityUnisonRatios[layer];
     }
 }
 

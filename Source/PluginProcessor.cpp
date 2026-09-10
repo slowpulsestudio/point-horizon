@@ -65,6 +65,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout JungleStretchAudioProcessor:
     params.push_back (std::make_unique<juce::AudioParameterBool> (
         juce::ParameterID { singularityParamId, 1 }, "Singularity", false));
 
+    // Flavour of the Singularity freeze — validated offline first (see
+    // Prototyping/singularity_whitehole_prototype.py and
+    // Output/singularity-whitehole/) before being added here.
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { singularityModeParamId, 1 }, "Singularity Mode",
+        juce::StringArray { "Black Hole", "Grey Hole", "White Hole" }, 0));
+
     return { params.begin(), params.end() };
 }
 
@@ -111,6 +118,15 @@ void JungleStretchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
                            ? GrainWanderEngine::PitchMode::wholeSignal
                            : GrainWanderEngine::PitchMode::grainOnly;
     params.singularityEngaged = apvts.getRawParameterValue (singularityParamId)->load() > 0.5f;
+    {
+        const int singularityModeIndex = (int) std::round (apvts.getRawParameterValue (singularityModeParamId)->load());
+        switch (singularityModeIndex)
+        {
+            case 1: params.singularityMode = GrainWanderEngine::SingularityMode::greyHole; break;
+            case 2: params.singularityMode = GrainWanderEngine::SingularityMode::whiteHole; break;
+            default: params.singularityMode = GrainWanderEngine::SingularityMode::blackHole; break;
+        }
+    }
 
     engine.process (buffer, params, getPlayHead());
 }

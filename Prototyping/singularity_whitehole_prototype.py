@@ -57,16 +57,9 @@ def peak(x: np.ndarray) -> float:
 
 
 def resample_linear(window: np.ndarray, ratio: float, out_len: int) -> np.ndarray:
-    """Reads `window` at `ratio` speed, wrapping, for `out_len` output frames."""
+    """Reads `window` at a constant `ratio` speed, wrapping, for `out_len` output frames."""
     n = len(window)
-    read_pos = (np.arange(out_len) * ratio) % n
-    i0 = np.floor(read_pos).astype(np.int64) % n
-    i1 = (i0 + 1) % n
-    frac = (read_pos - np.floor(read_pos))
-    if window.ndim == 1:
-        return window[i0] * (1 - frac) + window[i1] * frac
-    frac = frac[:, None]
-    return window[i0] * (1 - frac) + window[i1] * frac
+    return resample_at_positions(window, (np.arange(out_len) * ratio) % n)
 
 
 def soft_saturate(x: np.ndarray, drive: float) -> np.ndarray:
@@ -76,6 +69,52 @@ def soft_saturate(x: np.ndarray, drive: float) -> np.ndarray:
     if drive <= 0.0:
         return x
     return np.tanh(drive * x) / np.tanh(drive)
+
+
+def resample_at_positions(window: np.ndarray, read_pos: np.ndarray) -> np.ndarray:
+    """Reads `window` (wrapping) at arbitrary, possibly time-varying fractional
+    positions - generalises resample_linear() to a non-constant playback rate."""
+    n = len(window)
+    i0 = np.floor(read_pos).astype(np.int64) % n
+    i1 = (i0 + 1) % n
+    frac = read_pos - np.floor(read_pos)
+    if window.ndim == 1:
+        return window[i0] * (1 - frac) + window[i1] * frac
+    frac = frac[:, None]
+    return window[i0] * (1 - frac) + window[i1] * frac
+
+
+def apply_black_hole(x: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray]:
+    """Reference render of the shipped Singularity ("Black hole") behavior,
+    for A/B comparison against White hole candidates.
+
+    Approximates its dominant, perceptually-defining mechanic under a
+    sustained hold: Time Dilation - the frozen ~90ms window is looped at a
+    speed that decays exponentially toward near-static (GrainWanderEngine.cpp's
+    applySingularity(): speedFloor=0.02, timeConstantSeconds=1.4). Gravity
+    Well / Spaghettification / Redshift / Supernova mainly colour the
+    underlying live Stretch/Drag wander, which is almost fully overwritten
+    by the frozen loop once singularityBlend nears 1 during a sustained
+    hold - so they're not reproduced here; this is a close reference for
+    the drone character, not a bit-exact port.
+    """
+    freeze_frames = max(1, int(round(FREEZE_WINDOW_MS / 1000.0 * sr)))
+    freeze_start = int(round(FREEZE_AT_SECONDS * sr))
+    window = x[freeze_start:freeze_start + freeze_frames]
+
+    hold_frames = int(round(HOLD_SECONDS * sr))
+    dry = x[freeze_start:freeze_start + hold_frames]
+    if len(dry) < hold_frames:
+        dry = np.pad(dry, [(0, hold_frames - len(dry))] + [(0, 0)] * (x.ndim - 1))
+
+    speed_floor = 0.02
+    time_constant_seconds = 1.4
+    t = np.arange(hold_frames) / sr
+    speed = speed_floor + (1.0 - speed_floor) * np.exp(-t / time_constant_seconds)
+    read_pos = np.cumsum(speed) % freeze_frames
+
+    wet = resample_at_positions(window, read_pos)
+    return dry, wet
 
 
 def apply_white_hole(x: np.ndarray, sr: int, drive: float) -> tuple[np.ndarray, np.ndarray]:
@@ -98,9 +137,11 @@ def apply_white_hole(x: np.ndarray, sr: int, drive: float) -> tuple[np.ndarray, 
     return dry, wet
 
 
-def save_render(name: str, subdir: Path, dry: np.ndarray, wet: np.ndarray, sr: int):
+def save_render(name: str, subdir: Path, dry: np.ndarray, wet: np.ndarray, sr: int, save_dry: bool = False):
     subdir.mkdir(parents=True, exist_ok=True)
     sf.write(subdir / f"{name}.wav", wet, sr)
+    if save_dry:
+        sf.write(subdir / f"{name}_dry.wav", dry, sr)
 
     mono_dry = dry if dry.ndim == 1 else dry.mean(axis=1)
     mono_wet = wet if wet.ndim == 1 else wet.mean(axis=1)
@@ -142,12 +183,27 @@ def render_drive_sweep(x: np.ndarray, sr: int):
         save_render(f"drive_{drive:05.1f}", subdir, dry, wet, sr)
 
 
+def render_comparison(x: np.ndarray, sr: int):
+    """Dry / Black hole / White hole (drive=2, the candidate asked about) side
+    by side, same freeze window and hold length, for direct A/B listening."""
+    subdir = OUTPUT_DIR / "comparison"
+
+    dry, black_hole_wet = apply_black_hole(x, sr)
+    save_render ("black_hole", subdir, dry, black_hole_wet, sr, save_dry=True)
+
+    dry, white_hole_wet = apply_white_hole(x, sr, drive=2.0)
+    save_render ("white_hole_drive_002", subdir, dry, white_hole_wet, sr)
+
+
 def main():
     x, sr = sf.read(INPUT_FILE, always_2d=False)
     print(f"Loaded {INPUT_FILE.name}: {len(x)} frames @ {sr}Hz, shape={x.shape}")
 
     print("\n== White hole saturation drive sweep (Round 1, unison detune fixed) ==")
     render_drive_sweep(x, sr)
+
+    print("\n== Comparison: dry vs Black hole vs White hole (drive=2) ==")
+    render_comparison(x, sr)
 
     print(f"\nRenders written to {OUTPUT_DIR}")
 

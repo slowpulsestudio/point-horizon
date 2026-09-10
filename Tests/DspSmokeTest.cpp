@@ -558,7 +558,8 @@ namespace
     // All five mechanics together (Gravity well, Time dilation, Redshift,
     // Spaghettification, Supernova) must stay finite through a long hold and
     // release, in both Stretch (grainOnly pitch) and Drag mode.
-    bool testSingularityAllMechanicsAreStable (GrainWanderEngine::Mode mode, GrainWanderEngine::PitchMode pitchMode)
+    bool testSingularityAllMechanicsAreStable (GrainWanderEngine::Mode mode, GrainWanderEngine::PitchMode pitchMode,
+                                                GrainWanderEngine::SingularityMode singularityMode = GrainWanderEngine::SingularityMode::blackHole)
     {
         constexpr double sampleRate = 44100.0;
         constexpr int blockSize = 512;
@@ -575,6 +576,7 @@ namespace
         params.manualBpm = 137.0;
         params.pitchMode = pitchMode;
         params.pitchPercent = 20.0f; // nonzero, so Redshift has something to override
+        params.singularityMode = singularityMode;
 
         juce::Random rng (2468);
 
@@ -636,6 +638,26 @@ namespace
                           : "FAIL: Drag mode mechanics test failed") << std::endl;
         return ok;
     }
+
+    bool testGreyHoleIsStable()
+    {
+        const bool ok = testSingularityAllMechanicsAreStable (GrainWanderEngine::Mode::stretch,
+                                                               GrainWanderEngine::PitchMode::grainOnly,
+                                                               GrainWanderEngine::SingularityMode::greyHole);
+        std::cout << (ok ? "PASS: Grey hole (unison freeze, no pitch pull) stays finite"
+                          : "FAIL: Grey hole test failed") << std::endl;
+        return ok;
+    }
+
+    bool testWhiteHoleIsStable()
+    {
+        const bool ok = testSingularityAllMechanicsAreStable (GrainWanderEngine::Mode::stretch,
+                                                               GrainWanderEngine::PitchMode::grainOnly,
+                                                               GrainWanderEngine::SingularityMode::whiteHole);
+        std::cout << (ok ? "PASS: White hole (unison freeze, Blueshift) stays finite"
+                          : "FAIL: White hole test failed") << std::endl;
+        return ok;
+    }
 }
 
 int main()
@@ -654,6 +676,8 @@ int main()
     allPassed = testSingularityHoldAndReleaseIsStable() && allPassed;
     allPassed = testSingularityAllMechanicsStableInStretchMode() && allPassed;
     allPassed = testSingularityAllMechanicsStableInDragMode() && allPassed;
+    allPassed = testGreyHoleIsStable() && allPassed;
+    allPassed = testWhiteHoleIsStable() && allPassed;
 
     std::cout << (allPassed ? "ALL TESTS PASSED" : "SOME TESTS FAILED") << std::endl;
     return allPassed ? 0 : 1;

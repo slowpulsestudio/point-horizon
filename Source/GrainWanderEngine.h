@@ -24,12 +24,16 @@
  * Singularity is a performance on/off toggle themed around real black-hole
  * mechanics; all five deepen together the longer it's held, via a shared
  * hold-time ramp (`singularityDepth01`) and a fast crossfade gate
- * (`singularityBlend`) that keeps engage/release click-free:
+ * (`singularityBlend`) that keeps engage/release click-free. A 3-way
+ * SingularityMode picks the flavour of the frozen loop and its pitch pull:
  *  - Gravity well: grain selection is pulled toward the pool's most recent
  *    grain, tightening the wander into a single loop.
- *  - Time dilation: the frozen loop's playback speed decays toward a
- *    near-static drone (Time Dilation Freeze; see applySingularity()).
- *  - Redshift: pitch auto-ramps toward -50% while held, snapping back to
+ *  - Time dilation / unison freeze: Black hole decays the frozen loop's
+ *    playback speed toward a near-static drone; Grey/White hole instead
+ *    loop it at a fixed rate across 3 slightly-detuned unison layers,
+ *    summed and soft-saturated (see applySingularity()).
+ *  - Redshift/Blueshift: pitch auto-ramps toward -50% (Black hole) or +50%
+ *    (White hole) while held, or stays put (Grey hole), snapping back to
  *    the user's raw Pitch knob the instant it's released.
  *  - Spaghettification: grain length itself stretches from short to very
  *    long the longer it's held.
@@ -44,6 +48,11 @@ public:
     enum class Mode { stretch = 0, drag = 1, stumble = 2, turnaround = 3, halfTimeDrop = 4 };
     enum class PitchMode { wholeSignal = 0, grainOnly = 1 };
 
+    // Black hole: existing Time Dilation freeze + Redshift (pitch to -50%).
+    // Grey hole: fixed-rate unison-detuned freeze, no pitch shift.
+    // White hole: same freeze as Grey hole, but Blueshift (pitch to +50%).
+    enum class SingularityMode { blackHole = 0, greyHole = 1, whiteHole = 2 };
+
     struct Parameters
     {
         Mode mode = Mode::stretch;
@@ -57,6 +66,7 @@ public:
         float pitchPercent = 0.0f; // -50 .. +50, 0 = no pitch change
         PitchMode pitchMode = PitchMode::wholeSignal;
         bool singularityEngaged = false;
+        SingularityMode singularityMode = SingularityMode::blackHole;
     };
 
     void prepare (double sampleRateIn, int maxBlockSize, int numChannelsIn);
@@ -102,6 +112,13 @@ private:
     juce::int64 singularityAnchorAbsStart = 0;
     double singularityLoopOffset = 0.0;
     int singularityWindowLenSamples = 0;
+
+    // Grey/White hole: fixed-rate unison-detuned freeze (no exponential
+    // slowdown), one loop offset per detune layer.
+    static constexpr int singularityUnisonLayers = 3;
+    static constexpr double singularityUnisonRatios[singularityUnisonLayers] = { 1.0, 1.0009, 0.9991 };
+    static constexpr double singularityUnisonSaturationDrive = 1.0;
+    double singularityUnisonOffsets[singularityUnisonLayers] = { 0.0, 0.0, 0.0 };
 
     // Shared "how deep in" ramp (0..1, grows with singularityHoldSeconds),
     // used by Gravity well / Spaghettification / Redshift / Supernova.
