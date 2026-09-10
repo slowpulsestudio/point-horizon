@@ -4,11 +4,12 @@
 namespace
 {
     // Parameter changes that should refresh the preset toolbar's dirty indicator.
+    // Mix (and any future Input/Output-section control) is deliberately excluded —
+    // presets/Randomise never touch it, so it must not affect the dirty state either.
     constexpr const char* trackedParamIds[] = {
         JungleStretchAudioProcessor::intensityParamId,
         JungleStretchAudioProcessor::loopLengthParamId,
         JungleStretchAudioProcessor::chopRateParamId,
-        JungleStretchAudioProcessor::mixParamId,
         JungleStretchAudioProcessor::triggerWindowParamId,
         JungleStretchAudioProcessor::triggerChanceParamId,
         JungleStretchAudioProcessor::manualBpmParamId,

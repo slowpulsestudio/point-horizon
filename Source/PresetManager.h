@@ -8,7 +8,9 @@
 // Source/Components/PresetToolbar.h). Mode, Pitch Mode, and Singularity are
 // deliberately excluded from all of this — they're global processing-mode
 // toggles, not creative/tunable values (see "Preset-defining values vs.
-// global mode toggles" in master-skills.md).
+// global mode toggles" in master-skills.md). Mix is also excluded — presets
+// and Randomise never touch Input/Output/Mix-section controls (see
+// project-specific-agent-instructions.md).
 namespace JungleStretchPresets
 {
 
@@ -18,7 +20,6 @@ struct Values
     float intensity;
     float loopLengthMs;
     float chopRate;
-    float mix;
     float triggerWindow;
     float triggerChance;
     float manualBpm;
@@ -29,7 +30,7 @@ struct Values
 inline const std::vector<Values>& getFactoryPresets()
 {
     static const std::vector<Values> presets {
-        { "Default", 40.0f, 4000.0f, 50.0f, 100.0f, 25.0f, 100.0f, 120.0f, 0.0f }
+        { "Default", 40.0f, 4000.0f, 50.0f, 25.0f, 100.0f, 120.0f, 0.0f }
     };
     return presets;
 }
@@ -45,7 +46,6 @@ inline void apply (juce::AudioProcessorValueTreeState& apvts, const Values& valu
     setParam (JungleStretchAudioProcessor::intensityParamId, values.intensity);
     setParam (JungleStretchAudioProcessor::loopLengthParamId, values.loopLengthMs);
     setParam (JungleStretchAudioProcessor::chopRateParamId, values.chopRate);
-    setParam (JungleStretchAudioProcessor::mixParamId, values.mix);
     setParam (JungleStretchAudioProcessor::triggerWindowParamId, values.triggerWindow);
     setParam (JungleStretchAudioProcessor::triggerChanceParamId, values.triggerChance);
     setParam (JungleStretchAudioProcessor::manualBpmParamId, values.manualBpm);
@@ -59,7 +59,6 @@ inline Values captureCurrentValues (juce::AudioProcessorValueTreeState& apvts)
         apvts.getRawParameterValue (JungleStretchAudioProcessor::intensityParamId)->load(),
         apvts.getRawParameterValue (JungleStretchAudioProcessor::loopLengthParamId)->load(),
         apvts.getRawParameterValue (JungleStretchAudioProcessor::chopRateParamId)->load(),
-        apvts.getRawParameterValue (JungleStretchAudioProcessor::mixParamId)->load(),
         apvts.getRawParameterValue (JungleStretchAudioProcessor::triggerWindowParamId)->load(),
         apvts.getRawParameterValue (JungleStretchAudioProcessor::triggerChanceParamId)->load(),
         apvts.getRawParameterValue (JungleStretchAudioProcessor::manualBpmParamId)->load(),
@@ -72,7 +71,6 @@ inline bool matches (const Values& a, const Values& b, float epsilon = 0.001f)
     return std::abs (a.intensity - b.intensity) < epsilon
         && std::abs (a.loopLengthMs - b.loopLengthMs) < epsilon
         && std::abs (a.chopRate - b.chopRate) < epsilon
-        && std::abs (a.mix - b.mix) < epsilon
         && std::abs (a.triggerWindow - b.triggerWindow) < epsilon
         && std::abs (a.triggerChance - b.triggerChance) < epsilon
         && std::abs (a.manualBpm - b.manualBpm) < epsilon
@@ -92,7 +90,6 @@ inline void randomise (juce::AudioProcessorValueTreeState& apvts)
     randomiseParam (JungleStretchAudioProcessor::intensityParamId);
     randomiseParam (JungleStretchAudioProcessor::loopLengthParamId);
     randomiseParam (JungleStretchAudioProcessor::chopRateParamId);
-    randomiseParam (JungleStretchAudioProcessor::mixParamId);
     randomiseParam (JungleStretchAudioProcessor::triggerWindowParamId);
     randomiseParam (JungleStretchAudioProcessor::triggerChanceParamId);
     randomiseParam (JungleStretchAudioProcessor::manualBpmParamId);
