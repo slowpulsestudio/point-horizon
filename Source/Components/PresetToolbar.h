@@ -41,12 +41,15 @@ public:
             refreshDisplay();
         };
         addAndMakeVisible (presetBox);
+        presetBox.setTooltip ("Select a factory preset");
 
         prevPresetButton.onClick = [this] { cyclePreset (-1); };
         addAndMakeVisible (prevPresetButton);
+        prevPresetButton.setTooltip ("Previous preset");
 
         nextPresetButton.onClick = [this] { cyclePreset (1); };
         addAndMakeVisible (nextPresetButton);
+        nextPresetButton.setTooltip ("Next preset");
 
         randomiseButton.onClick = [this]
         {
@@ -55,6 +58,7 @@ public:
             refreshDisplay();
         };
         addAndMakeVisible (randomiseButton);
+        randomiseButton.setTooltip ("Randomise the current preset's tunable parameters");
     }
 
     ~PresetToolbar() override { presetBox.setLookAndFeel (nullptr); }

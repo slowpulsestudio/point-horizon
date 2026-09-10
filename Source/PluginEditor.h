@@ -22,6 +22,7 @@ private:
     void selectPreset (int index);
 
     JungleStretchAudioProcessor& processorRef;
+    juce::TooltipWindow tooltipWindow { nullptr, 500 }; // required for setTooltip() text to actually pop up
     sps::PresetToolbar presetToolbar;
     juce::GenericAudioProcessorEditor genericEditor;
     int selectedPresetIndex = 0;
