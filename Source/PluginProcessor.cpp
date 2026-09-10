@@ -15,11 +15,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout JungleStretchAudioProcessor:
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // Mode is limited to Stretch/Drag for now — Stumble, Turnaround and
-    // Half-Time Drop are validated offline first before being added here.
+    // Stumble, Turnaround and Half-Time Drop were validated offline first
+    // (see Prototyping/jungle_stretch_prototype.py's render_position_gated()
+    // and Output/jungle-stretch/position_gated/) before being added here.
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { modeParamId, 1 }, "Mode",
-        juce::StringArray { "Stretch", "Drag" }, 0));
+        juce::StringArray { "Stretch", "Drag", "Stumble", "Turnaround", "Half-Time Drop" }, 0));
 
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { intensityParamId, 1 }, "Intensity",
@@ -87,9 +88,17 @@ void JungleStretchAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
     juce::ScopedNoDenormals noDenormals;
 
     GrainWanderEngine::Parameters params;
-    params.mode = apvts.getRawParameterValue (modeParamId)->load() < 0.5f
-                      ? GrainWanderEngine::Mode::stretch
-                      : GrainWanderEngine::Mode::drag;
+    {
+        const int modeIndex = (int) std::round (apvts.getRawParameterValue (modeParamId)->load());
+        switch (modeIndex)
+        {
+            case 1: params.mode = GrainWanderEngine::Mode::drag; break;
+            case 2: params.mode = GrainWanderEngine::Mode::stumble; break;
+            case 3: params.mode = GrainWanderEngine::Mode::turnaround; break;
+            case 4: params.mode = GrainWanderEngine::Mode::halfTimeDrop; break;
+            default: params.mode = GrainWanderEngine::Mode::stretch; break;
+        }
+    }
     params.intensity01 = apvts.getRawParameterValue (intensityParamId)->load() / 100.0f;
     params.loopLengthMs = apvts.getRawParameterValue (loopLengthParamId)->load();
     params.chopRate01 = apvts.getRawParameterValue (chopRateParamId)->load() / 100.0f;

@@ -37,17 +37,17 @@ void GrainWanderEngine::reset()
     stretchSamplesIntoGrain = 0;
     stretchCurrentSourceAbsStart = -1;
 
-    dragWander.resetForNewWindow();
-    dragGrainFrames = 0;
-    dragSamplesIntoGrain = 0;
-    dragCurrentSourceAbsStart = -1;
-    dragPoolAbsStart = 0;
-    dragPoolLenSamples = 0;
-    dragWindowWasActive = false;
-    lastBarIndexSeen = -1;
-    currentBarPassesChance = true;
+    windowedWander.resetForNewWindow();
+    windowedGrainFrames = 0;
+    windowedSamplesIntoGrain = 0;
+    windowedCurrentSourceAbsStart = -1;
+    windowedPoolAbsStart = 0;
+    windowedPoolLenSamples = 0;
+    windowedWasActive = false;
+    lastUnitIndexSeen = -1;
+    currentUnitPassesChance = true;
     fallbackTransportPos = 0;
-    dragGrainReadPos = 0.0;
+    windowedGrainReadPos = 0.0;
 
     stretchGrainReadPos = 0.0;
 
@@ -305,7 +305,42 @@ void GrainWanderEngine::processStretch (juce::AudioBuffer<float>& buffer, const 
     }
 }
 
-void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead)
+GrainWanderEngine::WindowedConfig GrainWanderEngine::windowedConfigFor (Mode mode) noexcept
+{
+    WindowedConfig config;
+
+    switch (mode)
+    {
+        case Mode::stumble:
+            // Per-beat window is much shorter than a bar — a fixed, small
+            // grain (validated offline) is used instead of the Intensity
+            // mapping so at least a couple of grains fit in the window.
+            config.perBeat = true;
+            config.grainMsOverride = 15.0f;
+            break;
+
+        case Mode::turnaround:
+            // Same per-bar window as Drag, but only every 4th bar is eligible.
+            config.everyNUnits = 4;
+            break;
+
+        case Mode::halfTimeDrop:
+            // Same per-bar window as Drag, but speed is forced near-frozen
+            // and held as a single sustained run for the whole window.
+            config.freezeRun = true;
+            break;
+
+        case Mode::drag:
+        case Mode::stretch:
+        default:
+            break;
+    }
+
+    return config;
+}
+
+void GrainWanderEngine::processWindowed (juce::AudioBuffer<float>& buffer, const Parameters& params,
+                                          juce::AudioPlayHead* playHead, const WindowedConfig& config)
 {
     const int numSamples = buffer.getNumSamples();
     const bool pitchThisPath = params.pitchMode == PitchMode::grainOnly && currentEffectivePitchPercent != 0.0;
@@ -328,44 +363,47 @@ void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Par
         bpm = params.manualBpm;
 
     const double barFrames = sampleRate * 60.0 / bpm * 4.0; // 4/4 assumed, per the prompt spec
+    const double unitFrames = config.perBeat ? barFrames / 4.0 : barFrames;
 
     int pos = 0;
     while (pos < numSamples)
     {
         const juce::int64 absNow = transportStart + pos;
-        const auto barIndex = (juce::int64) std::floor ((double) absNow / barFrames);
-        const double barPhase = (double) absNow - (double) barIndex * barFrames;
-        const double windowLen = barFrames * (double) params.triggerWindow01;
-        const double windowStartPhase = barFrames - windowLen;
+        const auto unitIndex = (juce::int64) std::floor ((double) absNow / unitFrames);
+        const double unitPhase = (double) absNow - (double) unitIndex * unitFrames;
+        const double windowLen = unitFrames * (double) params.triggerWindow01;
+        const double windowStartPhase = unitFrames - windowLen;
 
-        if (barIndex != lastBarIndexSeen)
+        if (unitIndex != lastUnitIndexSeen)
         {
-            currentBarPassesChance = random.nextFloat() < params.triggerChance01;
-            lastBarIndexSeen = barIndex;
+            const bool eligibleUnit = ((unitIndex % config.everyNUnits) + config.everyNUnits) % config.everyNUnits
+                                       == config.everyNUnits - 1;
+            currentUnitPassesChance = eligibleUnit && random.nextFloat() < params.triggerChance01;
+            lastUnitIndexSeen = unitIndex;
         }
 
-        const bool inWindow = barPhase >= windowStartPhase;
-        const bool active = inWindow && currentBarPassesChance;
+        const bool inWindow = unitPhase >= windowStartPhase;
+        const bool active = inWindow && currentUnitPassesChance;
 
-        if (active && ! dragWindowWasActive)
+        if (active && ! windowedWasActive)
         {
             // Just entered a fresh window — restart the wander sequence, and
-            // source grains from the same window position one bar earlier.
-            dragWander.resetForNewWindow();
-            dragSamplesIntoGrain = 0;
-            dragGrainFrames = 0; // forces recompute on the first grain below
+            // source grains from the same window position one unit earlier.
+            windowedWander.resetForNewWindow();
+            windowedSamplesIntoGrain = 0;
+            windowedGrainFrames = 0; // forces recompute on the first grain below
 
             const auto windowLenSamples = (int) std::round (windowLen);
-            const auto prevBarStart = (juce::int64) ((double) (barIndex - 1) * barFrames);
-            const auto poolAbsStart = prevBarStart + (juce::int64) std::round (windowStartPhase);
+            const auto prevUnitStart = (juce::int64) ((double) (unitIndex - 1) * unitFrames);
+            const auto poolAbsStart = prevUnitStart + (juce::int64) std::round (windowStartPhase);
 
-            dragPoolAbsStart = poolAbsStart;
-            dragPoolLenSamples = windowLenSamples;
+            windowedPoolAbsStart = poolAbsStart;
+            windowedPoolLenSamples = windowLenSamples;
         }
 
-        dragWindowWasActive = active;
+        windowedWasActive = active;
 
-        const double samplesToNextEdge = inWindow ? (barFrames - barPhase) : (windowStartPhase - barPhase);
+        const double samplesToNextEdge = inWindow ? (unitFrames - unitPhase) : (windowStartPhase - unitPhase);
         int chunk = (int) juce::jmax (1.0, std::ceil (samplesToNextEdge));
         chunk = juce::jmin (chunk, numSamples - pos);
 
@@ -374,42 +412,55 @@ void GrainWanderEngine::processDrag (juce::AudioBuffer<float>& buffer, const Par
             int subPos = 0;
             while (subPos < chunk)
             {
-                if (dragSamplesIntoGrain >= dragGrainFrames || dragGrainFrames <= 0)
+                if (windowedSamplesIntoGrain >= windowedGrainFrames || windowedGrainFrames <= 0)
                 {
                     double grainMs, speedLo, speedHi;
                     computeIntensityParams (params.intensity01, grainMs, speedLo, speedHi);
+                    if (config.grainMsOverride > 0.0f)
+                        grainMs = (double) config.grainMsOverride;
                     if (singularityGate > 0.0)
                         grainMs = blendSpaghettiGrainMs (grainMs, singularityDepth01, singularityGate);
-                    dragGrainFrames = msToSamples (grainMs);
+                    windowedGrainFrames = msToSamples (grainMs);
 
                     int runLenMin, runLenMax;
                     computeChopRange (params.chopRate01, runLenMin, runLenMax);
 
-                    dragCurrentSourceAbsStart = pickNextSourceGrain (dragWander, dragPoolAbsStart, dragPoolLenSamples,
-                                                                      dragGrainFrames, runLenMin, runLenMax,
-                                                                      speedLo, speedHi, singularityDepth01 * singularityGate);
-                    dragGrainReadPos = (double) dragCurrentSourceAbsStart;
-                    dragSamplesIntoGrain = 0;
+                    if (config.freezeRun)
+                    {
+                        // Near-frozen sustained run: low speed, one run
+                        // spanning the whole window (huge run length so it
+                        // never re-rolls mid-window).
+                        speedLo = 0.05;
+                        speedHi = 0.3;
+                        runLenMin = 10000;
+                        runLenMax = 10001;
+                    }
+
+                    windowedCurrentSourceAbsStart = pickNextSourceGrain (windowedWander, windowedPoolAbsStart, windowedPoolLenSamples,
+                                                                          windowedGrainFrames, runLenMin, runLenMax,
+                                                                          speedLo, speedHi, singularityDepth01 * singularityGate);
+                    windowedGrainReadPos = (double) windowedCurrentSourceAbsStart;
+                    windowedSamplesIntoGrain = 0;
                 }
 
-                const int grainChunk = juce::jmin (chunk - subPos, dragGrainFrames - dragSamplesIntoGrain);
+                const int grainChunk = juce::jmin (chunk - subPos, windowedGrainFrames - windowedSamplesIntoGrain);
 
-                if (dragCurrentSourceAbsStart >= 0)
+                if (windowedCurrentSourceAbsStart >= 0)
                 {
                     if (pitchThisPath)
                     {
-                        copyFromHistoryPitched (buffer, pos + subPos, grainChunk, dragGrainReadPos, pitchRatio);
+                        copyFromHistoryPitched (buffer, pos + subPos, grainChunk, windowedGrainReadPos, pitchRatio);
                     }
                     else
                     {
-                        const auto srcStart = dragCurrentSourceAbsStart + dragSamplesIntoGrain;
+                        const auto srcStart = windowedCurrentSourceAbsStart + windowedSamplesIntoGrain;
                         if (isAbsRangeAvailable (srcStart, grainChunk))
                             copyFromHistory (buffer, pos + subPos, srcStart, grainChunk);
                     }
                 }
 
                 subPos += grainChunk;
-                dragSamplesIntoGrain += grainChunk;
+                windowedSamplesIntoGrain += grainChunk;
             }
         }
         // else: leave the buffer untouched — it still holds the dry input.
@@ -552,7 +603,7 @@ void GrainWanderEngine::process (juce::AudioBuffer<float>& buffer, const Paramet
     if (params.mode == Mode::stretch)
         processStretch (buffer, params);
     else
-        processDrag (buffer, params, playHead);
+        processWindowed (buffer, params, playHead, windowedConfigFor (params.mode));
 
     // Final dry/wet blend, smoothed to avoid zipper noise when Mix is automated.
     mixSmoothed.setTargetValue (params.mix01);

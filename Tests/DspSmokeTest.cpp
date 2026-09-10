@@ -168,6 +168,133 @@ namespace
         return true;
     }
 
+    // Stumble mode (per-beat gated window, no host playhead) must run for
+    // several bars without crashing or producing non-finite audio.
+    bool testStumbleModeIsStable()
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 256;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine engine;
+        engine.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = GrainWanderEngine::Mode::stumble;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+        params.triggerWindow01 = 0.3f;
+        params.triggerChance01 = 1.0f;
+        params.manualBpm = 137.0;
+
+        juce::Random rng (100);
+
+        const double barSeconds = 60.0 / params.manualBpm * 4.0;
+        const int totalBlocks = (int) std::ceil (16.0 * barSeconds * sampleRate / blockSize);
+
+        for (int b = 0; b < totalBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Stumble mode produced non-finite output" << std::endl;
+                return false;
+            }
+        }
+
+        std::cout << "PASS: Stumble mode ran for 16 bars with finite output" << std::endl;
+        return true;
+    }
+
+    // Turnaround mode (only every 4th bar eligible, no host playhead) must
+    // run for several bars without crashing or producing non-finite audio.
+    bool testTurnaroundModeIsStable()
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 256;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine engine;
+        engine.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = GrainWanderEngine::Mode::turnaround;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+        params.triggerWindow01 = 0.25f;
+        params.triggerChance01 = 1.0f;
+        params.manualBpm = 137.0;
+
+        juce::Random rng (101);
+
+        const double barSeconds = 60.0 / params.manualBpm * 4.0;
+        const int totalBlocks = (int) std::ceil (16.0 * barSeconds * sampleRate / blockSize);
+
+        for (int b = 0; b < totalBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Turnaround mode produced non-finite output" << std::endl;
+                return false;
+            }
+        }
+
+        std::cout << "PASS: Turnaround mode ran for 16 bars with finite output" << std::endl;
+        return true;
+    }
+
+    // Half-Time Drop mode (forced near-frozen sustained run, no host
+    // playhead) must run for several bars without crashing or producing
+    // non-finite audio.
+    bool testHalfTimeDropModeIsStable()
+    {
+        constexpr double sampleRate = 44100.0;
+        constexpr int blockSize = 256;
+        constexpr int numChannels = 2;
+
+        GrainWanderEngine engine;
+        engine.prepare (sampleRate, blockSize, numChannels);
+
+        GrainWanderEngine::Parameters params;
+        params.mode = GrainWanderEngine::Mode::halfTimeDrop;
+        params.mix01 = 1.0f;
+        params.intensity01 = 0.4f;
+        params.loopLengthMs = 4000.0f;
+        params.triggerWindow01 = 0.25f;
+        params.triggerChance01 = 1.0f;
+        params.manualBpm = 137.0;
+
+        juce::Random rng (102);
+
+        const double barSeconds = 60.0 / params.manualBpm * 4.0;
+        const int totalBlocks = (int) std::ceil (16.0 * barSeconds * sampleRate / blockSize);
+
+        for (int b = 0; b < totalBlocks; ++b)
+        {
+            juce::AudioBuffer<float> buffer (numChannels, blockSize);
+            fillWithNoise (buffer, rng);
+            engine.process (buffer, params, nullptr);
+
+            if (containsNonFinite (buffer))
+            {
+                std::cout << "FAIL: Half-Time Drop mode produced non-finite output" << std::endl;
+                return false;
+            }
+        }
+
+        std::cout << "PASS: Half-Time Drop mode ran for 16 bars with finite output" << std::endl;
+        return true;
+    }
+
     // Pitch=0 must be a no-op regardless of Pitch Mode — toggling the mode
     // alone (without moving the Pitch knob) must never change the output.
     bool testPitchZeroMatchesAcrossModes()
@@ -517,6 +644,9 @@ int main()
     allPassed = testMixZeroIsBitExactBypass() && allPassed;
     allPassed = testStretchProducesFiniteWetAudio() && allPassed;
     allPassed = testDragModeIsStable() && allPassed;
+    allPassed = testStumbleModeIsStable() && allPassed;
+    allPassed = testTurnaroundModeIsStable() && allPassed;
+    allPassed = testHalfTimeDropModeIsStable() && allPassed;
     allPassed = testPitchZeroMatchesAcrossModes() && allPassed;
     allPassed = testGrainOnlyPitchIsStable() && allPassed;
     allPassed = testWholeSignalPitchSustainedIsStable() && allPassed;

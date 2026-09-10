@@ -10,9 +10,10 @@
  * by real-time/causality constraints (no plugin latency is introduced):
  *  - Stretch mode's grain pool is the last "Loop Length" ms of live audio (a
  *    rolling history ring buffer), not the whole file.
- *  - Drag mode's grain pool, for the active trailing window of a bar, is the
- *    *same* window position captured one bar earlier (already sitting in
- *    history), instead of the live not-yet-fully-arrived current window.
+ *  - The windowed modes' (Drag, Stumble, Turnaround, Half-Time Drop) grain
+ *    pool, for the active trailing window of a bar/beat, is the *same*
+ *    window position captured one unit earlier (already sitting in history),
+ *    instead of the live not-yet-fully-arrived current window.
  *
  * A live "rough pitching" control (turntable-style, not pitch-preserving) can
  * run in two modes: Whole Signal resamples the final mixed output from a
@@ -40,7 +41,7 @@ class GrainWanderEngine
 public:
     GrainWanderEngine() = default;
 
-    enum class Mode { stretch = 0, drag = 1 };
+    enum class Mode { stretch = 0, drag = 1, stumble = 2, turnaround = 3, halfTimeDrop = 4 };
     enum class PitchMode { wholeSignal = 0, grainOnly = 1 };
 
     struct Parameters
@@ -126,18 +127,23 @@ private:
     juce::int64 stretchCurrentSourceAbsStart = -1;
     double stretchGrainReadPos = 0.0;
 
-    // Drag mode (per-window wander, sourced from one bar earlier).
-    WanderState dragWander;
-    int dragGrainFrames = 0;
-    int dragSamplesIntoGrain = 0;
-    juce::int64 dragCurrentSourceAbsStart = -1;
-    juce::int64 dragPoolAbsStart = 0;
-    int dragPoolLenSamples = 0;
-    bool dragWindowWasActive = false;
-    juce::int64 lastBarIndexSeen = -1;
-    bool currentBarPassesChance = true;
+    // Windowed modes (Drag, Stumble, Turnaround, Half-Time Drop): all share
+    // the same rhythm-gated-window scaffolding (wander confined to a trailing
+    // fraction of a bar or beat, sourced from the same window position one
+    // unit earlier), differing only in unit length / eligibility / speed
+    // config (see WindowedConfig in processWindowed()). Only one windowed
+    // mode can be active at a time, so they share this state.
+    WanderState windowedWander;
+    int windowedGrainFrames = 0;
+    int windowedSamplesIntoGrain = 0;
+    juce::int64 windowedCurrentSourceAbsStart = -1;
+    juce::int64 windowedPoolAbsStart = 0;
+    int windowedPoolLenSamples = 0;
+    bool windowedWasActive = false;
+    juce::int64 lastUnitIndexSeen = -1;
+    bool currentUnitPassesChance = true;
     juce::int64 fallbackTransportPos = 0;
-    double dragGrainReadPos = 0.0;
+    double windowedGrainReadPos = 0.0;
 
     void writeToHistory (const juce::AudioBuffer<float>& input);
     void copyFromHistory (juce::AudioBuffer<float>& dest, int destStartSample,
@@ -155,8 +161,20 @@ private:
                                       int grainFrames, int runLenMin, int runLenMax,
                                       double speedLo, double speedHi, double gravityWellPull);
 
+    // Per-mode config for the shared windowed-mode scaffolding.
+    struct WindowedConfig
+    {
+        bool perBeat = false;        // Stumble: gate per-beat instead of per-bar.
+        int everyNUnits = 1;         // Turnaround: only every Nth unit is eligible.
+        float grainMsOverride = 0.0f; // Stumble: fixed grain size (0 = use Intensity mapping).
+        bool freezeRun = false;      // Half-Time Drop: force a near-frozen, single sustained run.
+    };
+
+    static WindowedConfig windowedConfigFor (Mode mode) noexcept;
+
     void processStretch (juce::AudioBuffer<float>& buffer, const Parameters& params);
-    void processDrag (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead);
+    void processWindowed (juce::AudioBuffer<float>& buffer, const Parameters& params, juce::AudioPlayHead* playHead,
+                           const WindowedConfig& config);
     void applyWholeSignalPitch (juce::AudioBuffer<float>& buffer, float pitchPercent);
     void updateSingularityState (const Parameters& params, int numSamples);
     void applySingularity (juce::AudioBuffer<float>& buffer, const Parameters& params);
